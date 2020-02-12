@@ -1,0 +1,15 @@
+[package]
+name = "vulkan_tests"
+version = "0.1.0"
+authors = ["Anton Vladimirov <styleex@inbox.ru>"]
+edition = "2018"
+publish = false
+
+[dependencies]
+vulkano = "0.13"
+vulkano-shaders = "0.13"
+vulkano-win = "0.13"
+cgmath = "0.17"
+image = "0.21"
+winit = "0.19"
+time = "0.1.37"
