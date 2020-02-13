@@ -32,21 +32,23 @@ use vulkano::swapchain::{AcquireError, PresentMode, SurfaceTransform, Swapchain,
 use vulkano::swapchain;
 use vulkano::sync::{GpuFuture, FlushError};
 use vulkano::sync;
+use vulkano::buffer::cpu_pool::CpuBufferPool;
+use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer};
 
 use vulkano_win::VkSurfaceBuild;
 use winit::window::WindowBuilder;
 use winit::event_loop::{EventLoop, ControlFlow};
-use winit::event::{Event, WindowEvent, ElementState};
+use winit::event::{Event, WindowEvent, ElementState, VirtualKeyCode};
 
-use cgmath::Matrix4;
-use cgmath::SquareMatrix;
-use cgmath::Vector3;
+use cgmath::{Matrix4, Rad, SquareMatrix, Vector3};
 
+mod camera;
 mod frame;
 mod triangle_draw_system;
 
 use crate::frame::*;
 use crate::triangle_draw_system::*;
+use crate::camera::Camera;
 
 fn main() {
     // Basic initialization. See the triangle example if you want more details about this.
@@ -62,9 +64,9 @@ fn main() {
         q.supports_graphics() && surface.is_supported(q).unwrap_or(false)
     }).expect("couldn't find a graphical queue family");
 
-    let device_ext = DeviceExtensions { khr_swapchain: true, .. DeviceExtensions::none() };
+    let device_ext = DeviceExtensions { khr_swapchain: true, ..DeviceExtensions::none() };
     let (device, mut queues) = Device::new(physical, physical.supported_features(), &device_ext,
-        [(queue_family, 0.5)].iter().cloned()).unwrap();
+                                           [(queue_family, 0.5)].iter().cloned()).unwrap();
     let queue = queues.next().unwrap();
 
     let (mut swapchain, mut images) = {
@@ -76,10 +78,9 @@ fn main() {
         let dimensions: [u32; 2] = surface.window().inner_size().into();
 
         Swapchain::new(device.clone(), surface.clone(), caps.min_image_count, format,
-            dimensions, 1, usage, &queue, SurfaceTransform::Identity, alpha,
-            PresentMode::Fifo, FullscreenExclusive::Default, true, ColorSpace::SrgbNonLinear).unwrap()
+                       dimensions, 1, usage, &queue, SurfaceTransform::Identity, alpha,
+                       PresentMode::Fifo, FullscreenExclusive::Default, true, ColorSpace::SrgbNonLinear).unwrap()
     };
-
 
     // Here is the basic initialization for the deferred system.
     let mut frame_system = FrameSystem::new(queue.clone(), swapchain.format());
@@ -88,22 +89,32 @@ fn main() {
     let mut recreate_swapchain = false;
     let mut previous_frame_end = Some(Box::new(sync::now(device.clone())) as Box<dyn GpuFuture>);
 
+    let world = Matrix4::<f32>::identity();
+    let mut camera = Camera::new();
+
     event_loop.run(move |event, _, control_flow| {
+        match &event {
+            Event::WindowEvent {event, ..} => camera.handle_event(event),
+            _ => (),
+        }
+
         match event {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
                 *control_flow = ControlFlow::Exit;
-            },
+            }
             Event::WindowEvent { event: WindowEvent::Resized(_), .. } => {
                 recreate_swapchain = true;
-            },
-            Event::WindowEvent { event: WindowEvent::KeyboardInput{input, ..}, .. } => {
+            }
+            Event::WindowEvent { event: WindowEvent::KeyboardInput { input, .. }, .. } => {
                 if input.state == ElementState::Released {
-                    if input.scancode == 53 {
+                    if input.virtual_keycode == Some(VirtualKeyCode::Escape) {
                         *control_flow = ControlFlow::Exit;
                         return;
                     }
                 }
-            },
+                camera.handle_keyboard(input);
+            }
+
             Event::RedrawEventsCleared => {
                 previous_frame_end.as_mut().unwrap().cleanup_finished();
 
@@ -118,6 +129,8 @@ fn main() {
                     swapchain = new_swapchain;
                     images = new_images;
                     recreate_swapchain = false;
+
+                    camera.set_viewport(dimensions[0], dimensions[1]);
                 }
 
                 let (image_num, suboptimal, acquire_future) = match swapchain::acquire_next_image(swapchain.clone(), None) {
@@ -125,7 +138,7 @@ fn main() {
                     Err(AcquireError::OutOfDate) => {
                         recreate_swapchain = true;
                         return;
-                    },
+                    }
                     Err(e) => panic!("Failed to acquire next image: {:?}", e)
                 };
 
@@ -139,15 +152,16 @@ fn main() {
                 while let Some(pass) = frame.next_pass() {
                     match pass {
                         Pass::Deferred(mut draw_pass) => {
-                            let cb = triangle_draw_system.draw(draw_pass.viewport_dimensions());
+                            let cb = triangle_draw_system.draw(draw_pass.viewport_dimensions(),
+                                                               world, camera.view_matrix(), camera.proj_matrix());
                             draw_pass.execute(cb);
                         }
                         Pass::Lighting(mut lighting) => {
                             lighting.ambient_light([0.1, 0.1, 0.1]);
-                            lighting.directional_light(Vector3::new(0.2, -0.1, -0.7), [0.6, 0.6, 0.6]);
-                            lighting.point_light(Vector3::new(0.5, -0.5, -0.1), [1.0, 0.0, 0.0]);
-                            lighting.point_light(Vector3::new(-0.9, 0.2, -0.15), [0.0, 1.0, 0.0]);
-                            lighting.point_light(Vector3::new(0.0, 0.5, -0.05), [0.0, 0.0, 1.0]);
+//                            lighting.directional_light(Vector3::new(0.2, -0.1, -0.7), [0.6, 0.6, 0.6]);
+//                            lighting.point_light(Vector3::new(0.5, -0.5, -0.1), [1.0, 0.0, 0.0]);
+//                            lighting.point_light(Vector3::new(-0.9, 0.2, -0.15), [0.0, 1.0, 0.0]);
+//                            lighting.point_light(Vector3::new(0.0, 0.5, -0.05), [0.0, 0.0, 1.0]);
                         }
                         Pass::Finished(af) => {
                             after_future = Some(af);
@@ -162,7 +176,7 @@ fn main() {
                 match future {
                     Ok(future) => {
                         previous_frame_end = Some(Box::new(future) as Box<_>);
-                    },
+                    }
                     Err(FlushError::OutOfDate) => {
                         recreate_swapchain = true;
                         previous_frame_end = Some(Box::new(sync::now(device.clone())) as Box<_>);
@@ -172,7 +186,7 @@ fn main() {
                         previous_frame_end = Some(Box::new(sync::now(device.clone())) as Box<_>);
                     }
                 }
-            },
+            }
             _ => ()
         }
     });
