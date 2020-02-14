@@ -1,102 +1,161 @@
-// Copyright (c) 2017 The vulkano developers
-// Licensed under the Apache License, Version 2.0
-// <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT
-// license <LICENSE-MIT or http://opensource.org/licenses/MIT>,
-// at your option. All files in the project carrying such
-// notice may not be copied, modified, or distributed except
-// according to those terms.
-
-
-// Welcome to the deferred lighting example!
-//
-// The idea behind deferred lighting is to render the scene in two steps.
-//
-// First you draw all the objects of the scene. But instead of calculating the color they will
-// have on the screen, you output their characteristics such as their diffuse color and their
-// normals, and write this to images.
-//
-// After all the objects are drawn, you should obtain several images that contain the
-// characteristics of each pixel.
-//
-// Then you apply lighting to the scene. In other words you draw to the final image by taking
-// these intermediate images and the various lights of the scene as input.
-//
-// This technique allows you to apply tons of light sources to a scene, which would be too
-// expensive otherwise. It has some drawbacks, which are the fact that transparent objects must be
-// drawn after the lighting, and that the whole process consumes more memory.
-
+use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer, CpuBufferPool};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, DynamicState};
 use vulkano::device::{Device, DeviceExtensions};
+use vulkano::framebuffer::{Framebuffer, FramebufferAbstract, Subpass, RenderPassAbstract};
+use vulkano::image::SwapchainImage;
 use vulkano::instance::{Instance, PhysicalDevice};
+use vulkano::pipeline::GraphicsPipeline;
+use vulkano::descriptor::pipeline_layout::PipelineLayoutAbstract;
+use vulkano::pipeline::viewport::Viewport;
 use vulkano::swapchain::{AcquireError, PresentMode, SurfaceTransform, Swapchain, SwapchainCreationError, ColorSpace, FullscreenExclusive};
 use vulkano::swapchain;
 use vulkano::sync::{GpuFuture, FlushError};
 use vulkano::sync;
-use vulkano::buffer::cpu_pool::CpuBufferPool;
-use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer};
+use vulkano::descriptor::descriptor_set::PersistentDescriptorSet;
 
 use vulkano_win::VkSurfaceBuild;
-use winit::window::WindowBuilder;
+use winit::window::{WindowBuilder, Window};
 use winit::event_loop::{EventLoop, ControlFlow};
-use winit::event::{Event, WindowEvent, ElementState, VirtualKeyCode};
+use winit::event::{Event, WindowEvent};
 
-use cgmath::{Matrix4, Rad, SquareMatrix, Vector3};
-
-mod camera;
-mod frame;
-mod triangle_draw_system;
-
-use crate::frame::*;
-use crate::triangle_draw_system::*;
+use std::sync::Arc;
 use crate::camera::Camera;
+use winit::event::{ElementState, VirtualKeyCode};
+mod camera;
+
+use cgmath::{Matrix4, SquareMatrix};
 
 fn main() {
-    // Basic initialization. See the triangle example if you want more details about this.
-
     let required_extensions = vulkano_win::required_extensions();
     let instance = Instance::new(None, &required_extensions, None).unwrap();
     let physical = PhysicalDevice::enumerate(&instance).next().unwrap();
+    println!("Using device: {} (type: {:?})", physical.name(), physical.ty());
 
     let event_loop = EventLoop::new();
     let surface = WindowBuilder::new().build_vk_surface(&event_loop, instance.clone()).unwrap();
 
     let queue_family = physical.queue_families().find(|&q| {
+        // We take the first queue that supports drawing to our window.
         q.supports_graphics() && surface.is_supported(q).unwrap_or(false)
-    }).expect("couldn't find a graphical queue family");
+    }).unwrap();
 
     let device_ext = DeviceExtensions { khr_swapchain: true, ..DeviceExtensions::none() };
     let (device, mut queues) = Device::new(physical, physical.supported_features(), &device_ext,
                                            [(queue_family, 0.5)].iter().cloned()).unwrap();
     let queue = queues.next().unwrap();
 
-    let (mut swapchain, mut images) = {
+    let mut cam = Camera::new();
+    let (mut swapchain, images) = {
         let caps = surface.capabilities(physical).unwrap();
-
         let usage = caps.supported_usage_flags;
+
         let alpha = caps.supported_composite_alpha.iter().next().unwrap();
         let format = caps.supported_formats[0].0;
+
         let dimensions: [u32; 2] = surface.window().inner_size().into();
 
+        cam.set_viewport(dimensions[0], dimensions[1]);
         Swapchain::new(device.clone(), surface.clone(), caps.min_image_count, format,
                        dimensions, 1, usage, &queue, SurfaceTransform::Identity, alpha,
                        PresentMode::Fifo, FullscreenExclusive::Default, true, ColorSpace::SrgbNonLinear).unwrap()
     };
 
-    // Here is the basic initialization for the deferred system.
-    let mut frame_system = FrameSystem::new(queue.clone(), swapchain.format());
-    let triangle_draw_system = TriangleDrawSystem::new(queue.clone(), frame_system.deferred_subpass());
+    let vertex_buffer = {
+        #[derive(Default, Debug, Clone)]
+        struct Vertex { position: [f32; 3] }
+        vulkano::impl_vertex!(Vertex, position);
+
+        CpuAccessibleBuffer::from_iter(device.clone(), BufferUsage::all(), false, [
+            Vertex { position: [-0.5, -0.25, -0.2] },
+            Vertex { position: [0.0, 0.5, -0.2] },
+            Vertex { position: [0.25, -0.1, -0.2] }
+        ].iter().cloned()).unwrap()
+    };
+
+    mod vs {
+        vulkano_shaders::shader! {
+            ty: "vertex",
+            src: "
+				#version 450
+
+				layout(location = 0) in vec3 position;
+
+                layout(set = 0, binding = 0) uniform Data {
+                    mat4 world;
+                    mat4 view;
+                    mat4 proj;
+                } uniforms;
+
+				void main() {
+					mat4 worldview = uniforms.view;// * uniforms.world;
+                    gl_Position = uniforms.proj * worldview * vec4(position, 1.0);
+                    gl_Position.y = -gl_Position.y;
+                    gl_Position.z = (gl_Position.z + gl_Position.w) / 2.0;
+				}
+			"
+        }
+    }
+
+    mod fs {
+        vulkano_shaders::shader! {
+            ty: "fragment",
+            src: "
+				#version 450
+
+				layout(location = 0) out vec4 f_color;
+
+				void main() {
+					f_color = gl_FragCoord; //vec4(1.0, 0.0, 0.0, 1.0);
+				}
+			"
+        }
+    }
+
+    let vs = vs::Shader::load(device.clone()).unwrap();
+    let fs = fs::Shader::load(device.clone()).unwrap();
+
+
+    let render_pass = Arc::new(vulkano::single_pass_renderpass!(
+        device.clone(),
+        attachments: {
+            color: {
+                load: Clear,
+                store: Store,
+                format: swapchain.format(),
+                samples: 1,
+            }
+        },
+        pass: {
+            color: [color],
+            depth_stencil: {}
+        }
+    ).unwrap());
+
+
+    let pipeline = Arc::new(GraphicsPipeline::start()
+        .vertex_input_single_buffer()
+        .vertex_shader(vs.main_entry_point(), ())
+        .triangle_list()
+        .viewports_dynamic_scissors_irrelevant(1)
+        .fragment_shader(fs.main_entry_point(), ())
+        .render_pass(Subpass::from(render_pass.clone(), 0).unwrap())
+        .build(device.clone())
+        .unwrap());
+
+    let mut dynamic_state = DynamicState { line_width: None, viewports: None, scissors: None, compare_mask: None, write_mask: None, reference: None };
+    let mut framebuffers = window_size_dependent_setup(&images, render_pass.clone(), &mut dynamic_state);
+
+    let uniform_buffer = CpuBufferPool::<vs::ty::Data>::new(device.clone(), BufferUsage::all());
 
     let mut recreate_swapchain = false;
+
     let mut previous_frame_end = Some(Box::new(sync::now(device.clone())) as Box<dyn GpuFuture>);
-
-    let world = Matrix4::<f32>::identity();
-    let mut camera = Camera::new();
-
     event_loop.run(move |event, _, control_flow| {
         match &event {
-            Event::WindowEvent {event, ..} => camera.handle_event(event),
+            Event::WindowEvent { event, .. } => cam.handle_event(event),
             _ => (),
         }
+
 
         match event {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
@@ -112,7 +171,7 @@ fn main() {
                         return;
                     }
                 }
-                camera.handle_keyboard(input);
+                cam.handle_keyboard(input);
             }
 
             Event::RedrawEventsCleared => {
@@ -127,10 +186,9 @@ fn main() {
                     };
 
                     swapchain = new_swapchain;
-                    images = new_images;
+                    framebuffers = window_size_dependent_setup(&new_images, render_pass.clone(), &mut dynamic_state);
+                    cam.set_viewport(dimensions[0], dimensions[1]);
                     recreate_swapchain = false;
-
-                    camera.set_viewport(dimensions[0], dimensions[1]);
                 }
 
                 let (image_num, suboptimal, acquire_future) = match swapchain::acquire_next_image(swapchain.clone(), None) {
@@ -146,30 +204,36 @@ fn main() {
                     recreate_swapchain = true;
                 }
 
-                let future = previous_frame_end.take().unwrap().join(acquire_future);
-                let mut frame = frame_system.frame(future, images[image_num].clone(), Matrix4::identity());
-                let mut after_future = None;
-                while let Some(pass) = frame.next_pass() {
-                    match pass {
-                        Pass::Deferred(mut draw_pass) => {
-                            let cb = triangle_draw_system.draw(draw_pass.viewport_dimensions(),
-                                                               world, camera.view_matrix(), camera.proj_matrix());
-                            draw_pass.execute(cb);
-                        }
-                        Pass::Lighting(mut lighting) => {
-                            lighting.ambient_light([0.1, 0.1, 0.1]);
-//                            lighting.directional_light(Vector3::new(0.2, -0.1, -0.7), [0.6, 0.6, 0.6]);
-//                            lighting.point_light(Vector3::new(0.5, -0.5, -0.1), [1.0, 0.0, 0.0]);
-//                            lighting.point_light(Vector3::new(-0.9, 0.2, -0.15), [0.0, 1.0, 0.0]);
-//                            lighting.point_light(Vector3::new(0.0, 0.5, -0.05), [0.0, 0.0, 1.0]);
-                        }
-                        Pass::Finished(af) => {
-                            after_future = Some(af);
-                        }
-                    }
-                }
+                let clear_values = vec!([0.0, 0.0, 1.0, 1.0].into());
 
-                let future = after_future.unwrap()
+                let world = Matrix4::identity();
+
+                let uniform_buffer_subbuffer = {
+                    let uniform_data = vs::ty::Data {
+                        world: world.into(),
+                        view: cam.view_matrix().into(),
+                        proj: cam.proj_matrix().into(),
+                    };
+
+                    uniform_buffer.next(uniform_data).unwrap()
+                };
+
+                let layout = pipeline.descriptor_set_layout(0).unwrap();
+                let set = Arc::new(PersistentDescriptorSet::start(layout.clone())
+                    .add_buffer(uniform_buffer_subbuffer).unwrap()
+                    .build().unwrap()
+                );
+
+
+                let command_buffer = AutoCommandBufferBuilder::primary_one_time_submit(device.clone(), queue.family()).unwrap()
+                    .begin_render_pass(framebuffers[image_num].clone(), false, clear_values).unwrap()
+                    .draw(pipeline.clone(), &dynamic_state, vertex_buffer.clone(), set.clone(), ()).unwrap()
+                    .end_render_pass().unwrap()
+                    .build().unwrap();
+
+                let future = previous_frame_end.take().unwrap()
+                    .join(acquire_future)
+                    .then_execute(queue.clone(), command_buffer).unwrap()
                     .then_swapchain_present(queue.clone(), swapchain.clone(), image_num)
                     .then_signal_fence_and_flush();
 
@@ -190,4 +254,28 @@ fn main() {
             _ => ()
         }
     });
+}
+
+/// This method is called once during initialization, then again whenever the window is resized
+fn window_size_dependent_setup(
+    images: &[Arc<SwapchainImage<Window>>],
+    render_pass: Arc<dyn RenderPassAbstract + Send + Sync>,
+    dynamic_state: &mut DynamicState,
+) -> Vec<Arc<dyn FramebufferAbstract + Send + Sync>> {
+    let dimensions = images[0].dimensions();
+
+    let viewport = Viewport {
+        origin: [0.0, 0.0],
+        dimensions: [dimensions[0] as f32, dimensions[1] as f32],
+        depth_range: 0.0..1.0,
+    };
+    dynamic_state.viewports = Some(vec!(viewport));
+
+    images.iter().map(|image| {
+        Arc::new(
+            Framebuffer::start(render_pass.clone())
+                .add(image.clone()).unwrap()
+                .build().unwrap()
+        ) as Arc<dyn FramebufferAbstract + Send + Sync>
+    }).collect::<Vec<_>>()
 }
