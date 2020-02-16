@@ -22,7 +22,7 @@ pub struct Camera {
 impl Camera {
     pub fn new() -> Camera {
         Camera {
-            position: Vector3::new(0.0, 0.0, 0.0),
+            position: Vector3::new(0.0, 2.0, 0.0),
             rotation: Vector3::new(0.0, 0.0, 0.0),
             proj: Matrix4::identity(),
             mouse_pressed: false,

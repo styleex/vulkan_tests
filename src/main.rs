@@ -1,7 +1,9 @@
 use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer, CpuBufferPool};
 use vulkano::command_buffer::{AutoCommandBufferBuilder, DynamicState};
 use vulkano::device::{Device, DeviceExtensions};
+use vulkano::format::Format;
 use vulkano::framebuffer::{Framebuffer, FramebufferAbstract, Subpass, RenderPassAbstract};
+use vulkano::image::{AttachmentImage, ImageUsage};
 use vulkano::image::SwapchainImage;
 use vulkano::instance::{Instance, PhysicalDevice};
 use vulkano::pipeline::GraphicsPipeline;
@@ -21,9 +23,12 @@ use winit::event::{Event, WindowEvent};
 use std::sync::Arc;
 use crate::camera::Camera;
 use winit::event::{ElementState, VirtualKeyCode};
+
+mod terrain;
 mod camera;
 
 use cgmath::{Matrix4, SquareMatrix};
+use crate::terrain::Terrain;
 
 fn main() {
     let required_extensions = vulkano_win::required_extensions();
@@ -44,6 +49,8 @@ fn main() {
                                            [(queue_family, 0.5)].iter().cloned()).unwrap();
     let queue = queues.next().unwrap();
 
+    let terr = Terrain::new(queue.clone());
+
     let mut cam = Camera::new();
     let (mut swapchain, images) = {
         let caps = surface.capabilities(physical).unwrap();
@@ -60,60 +67,8 @@ fn main() {
                        PresentMode::Fifo, FullscreenExclusive::Default, true, ColorSpace::SrgbNonLinear).unwrap()
     };
 
-    let vertex_buffer = {
-        #[derive(Default, Debug, Clone)]
-        struct Vertex { position: [f32; 3] }
-        vulkano::impl_vertex!(Vertex, position);
-
-        CpuAccessibleBuffer::from_iter(device.clone(), BufferUsage::all(), false, [
-            Vertex { position: [-0.5, -0.25, -0.2] },
-            Vertex { position: [0.0, 0.5, -0.2] },
-            Vertex { position: [0.25, -0.1, -0.2] }
-        ].iter().cloned()).unwrap()
-    };
-
-    mod vs {
-        vulkano_shaders::shader! {
-            ty: "vertex",
-            src: "
-				#version 450
-
-				layout(location = 0) in vec3 position;
-
-                layout(set = 0, binding = 0) uniform Data {
-                    mat4 world;
-                    mat4 view;
-                    mat4 proj;
-                } uniforms;
-
-				void main() {
-					mat4 worldview = uniforms.view;// * uniforms.world;
-                    gl_Position = uniforms.proj * worldview * vec4(position, 1.0);
-                    gl_Position.y = -gl_Position.y;
-                    gl_Position.z = (gl_Position.z + gl_Position.w) / 2.0;
-				}
-			"
-        }
-    }
-
-    mod fs {
-        vulkano_shaders::shader! {
-            ty: "fragment",
-            src: "
-				#version 450
-
-				layout(location = 0) out vec4 f_color;
-
-				void main() {
-					f_color = gl_FragCoord; //vec4(1.0, 0.0, 0.0, 1.0);
-				}
-			"
-        }
-    }
-
     let vs = vs::Shader::load(device.clone()).unwrap();
     let fs = fs::Shader::load(device.clone()).unwrap();
-
 
     let render_pass = Arc::new(vulkano::single_pass_renderpass!(
         device.clone(),
@@ -123,11 +78,17 @@ fn main() {
                 store: Store,
                 format: swapchain.format(),
                 samples: 1,
+            },
+            depth: {
+                load: Clear,
+                store: DontCare,
+                format: Format::D16Unorm,
+                samples: 1,
             }
         },
         pass: {
             color: [color],
-            depth_stencil: {}
+            depth_stencil: {depth}
         }
     ).unwrap());
 
@@ -139,11 +100,15 @@ fn main() {
         .viewports_dynamic_scissors_irrelevant(1)
         .fragment_shader(fs.main_entry_point(), ())
         .render_pass(Subpass::from(render_pass.clone(), 0).unwrap())
+        .cull_mode_front()
+        .front_face_counter_clockwise()
+        .polygon_mode_line()
+        .depth_stencil_simple_depth()
         .build(device.clone())
         .unwrap());
 
     let mut dynamic_state = DynamicState { line_width: None, viewports: None, scissors: None, compare_mask: None, write_mask: None, reference: None };
-    let mut framebuffers = window_size_dependent_setup(&images, render_pass.clone(), &mut dynamic_state);
+    let mut framebuffers = window_size_dependent_setup(&images, render_pass.clone(), &mut dynamic_state, queue.clone());
 
     let uniform_buffer = CpuBufferPool::<vs::ty::Data>::new(device.clone(), BufferUsage::all());
 
@@ -186,7 +151,7 @@ fn main() {
                     };
 
                     swapchain = new_swapchain;
-                    framebuffers = window_size_dependent_setup(&new_images, render_pass.clone(), &mut dynamic_state);
+                    framebuffers = window_size_dependent_setup(&new_images, render_pass.clone(), &mut dynamic_state, queue.clone());
                     cam.set_viewport(dimensions[0], dimensions[1]);
                     recreate_swapchain = false;
                 }
@@ -204,7 +169,7 @@ fn main() {
                     recreate_swapchain = true;
                 }
 
-                let clear_values = vec!([0.0, 0.0, 1.0, 1.0].into());
+                let clear_values = vec!([0.0, 0.0, 0.0, 1.0].into(), 1.0f32.into());
 
                 let world = Matrix4::identity();
 
@@ -227,7 +192,7 @@ fn main() {
 
                 let command_buffer = AutoCommandBufferBuilder::primary_one_time_submit(device.clone(), queue.family()).unwrap()
                     .begin_render_pass(framebuffers[image_num].clone(), false, clear_values).unwrap()
-                    .draw(pipeline.clone(), &dynamic_state, vertex_buffer.clone(), set.clone(), ()).unwrap()
+                    .draw_indexed(pipeline.clone(), &dynamic_state, terr.vertices.clone(), terr.indices.clone(), set.clone(), ()).unwrap()
                     .end_render_pass().unwrap()
                     .build().unwrap();
 
@@ -256,11 +221,61 @@ fn main() {
     });
 }
 
+mod vs {
+    vulkano_shaders::shader! {
+            ty: "vertex",
+            src: "
+				#version 450
+
+				layout(location = 0) in vec3 position;
+                layout(location = 1) in vec3 normal;
+                layout(set = 0, binding = 0) uniform Data {
+                    mat4 world;
+                    mat4 view;
+                    mat4 proj;
+                } uniforms;
+
+                layout(location=1) out vec3 rnormal;
+                layout(location=2) out vec3 rpos;
+				void main() {
+					mat4 worldview = uniforms.view;// * uniforms.world;
+                    gl_Position = uniforms.proj * worldview * vec4(position, 1.0);
+                    gl_Position.y = -gl_Position.y;
+                    gl_Position.z = (gl_Position.z + gl_Position.w) / 2.0;
+
+                    rpos = position;
+                    rnormal = normal;
+				}
+			"
+        }
+}
+
+mod fs {
+    vulkano_shaders::shader! {
+            ty: "fragment",
+            src: "
+				#version 450
+
+				layout(location = 0) out vec4 f_color;
+				layout(location = 1) in vec3 in_normal;
+				layout(location = 2) in vec3 in_world;
+
+				void main() {
+				    vec3 light_pos = normalize(vec3(1.0, 2.0, 1.0));
+                    float light_percent = max(-dot(light_pos, in_normal), 0.0);
+
+					f_color = 0.4 + vec4(in_normal, 1.0) * 10 * light_percent;
+				}
+			"
+        }
+}
+
 /// This method is called once during initialization, then again whenever the window is resized
 fn window_size_dependent_setup(
     images: &[Arc<SwapchainImage<Window>>],
     render_pass: Arc<dyn RenderPassAbstract + Send + Sync>,
     dynamic_state: &mut DynamicState,
+    gfx_queue: Arc<vulkano::device::Queue>,
 ) -> Vec<Arc<dyn FramebufferAbstract + Send + Sync>> {
     let dimensions = images[0].dimensions();
 
@@ -270,11 +285,22 @@ fn window_size_dependent_setup(
         depth_range: 0.0..1.0,
     };
     dynamic_state.viewports = Some(vec!(viewport));
+    let atch_usage = ImageUsage {
+        transient_attachment: true,
+        input_attachment: true,
+        ..ImageUsage::none()
+    };
+    let depth_buffer = AttachmentImage::with_usage(gfx_queue.device().clone(),
+                                                   [dimensions[0], dimensions[1]],
+                                                   Format::D16Unorm,
+                                                   atch_usage)
+        .unwrap();
 
     images.iter().map(|image| {
         Arc::new(
             Framebuffer::start(render_pass.clone())
                 .add(image.clone()).unwrap()
+                .add(depth_buffer.clone()).unwrap()
                 .build().unwrap()
         ) as Arc<dyn FramebufferAbstract + Send + Sync>
     }).collect::<Vec<_>>()
