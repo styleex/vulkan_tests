@@ -10,8 +10,9 @@ use cgmath::{Vector3, InnerSpace};
 pub struct Vertex {
     position: [f32; 3],
     normal: [f32; 3],
+    texcoord: [f32; 2],
 }
-vulkano::impl_vertex!(Vertex, position, normal);
+vulkano::impl_vertex!(Vertex, position, normal, texcoord);
 
 pub struct Terrain {
     pub vertices: Arc<ImmutableBuffer<[Vertex]>>,
@@ -51,7 +52,7 @@ impl Terrain {
                 let height = get_height(x, y);
 
                 let l = {
-                    if (x == 0) {
+                    if x == 0 {
                         get_height(x, y)
                     } else {
                         get_height(x - 1, y)
@@ -59,7 +60,7 @@ impl Terrain {
                 };
 
                 let r = {
-                    if (x >= (w-1)) {
+                    if x >= (w-1) {
                         get_height(x, y)
                     } else {
                         get_height(x + 1, y)
@@ -67,7 +68,7 @@ impl Terrain {
                 };
 
                 let t = {
-                    if (y >= (h-1)) {
+                    if y >= (h-1) {
                         get_height(x, y)
                     } else {
                         get_height(x, y + 1)
@@ -75,18 +76,20 @@ impl Terrain {
                 };
 
                 let b = {
-                    if (y == 0) {
+                    if y == 0 {
                         get_height(x, y)
                     } else {
                         get_height(x, y - 1)
                     }
                 };
 
-                let n = Vector3{x: 2.0*(l-r), y: 2.0*(t-b), z: -4.0};
+                let normal = Vector3{x: 2.0*(l-r), y: 2.0*(t-b), z: -4.0}.normalize();
 
+                println!("{:?} {:?}", x, y);
                 vertices.push(Vertex {
-                    position: [(x as f32) * 0.1, height, (y as f32) * 0.1],
-                    normal: n.normalize().into(),
+                    position: [(x as f32), height, (y as f32)],
+                    normal: normal.into(),
+                    texcoord: [x as f32, y as f32],
                 });
             }
         }
@@ -106,8 +109,6 @@ impl Terrain {
                 indices.push((y) * w + x + 1);
             }
         }
-
-        println!("{:?}", indices);
 
         let (bb, fut) = {
             ImmutableBuffer::from_iter(vertices.iter().cloned(), BufferUsage::vertex_buffer(), queue.clone()).unwrap()
