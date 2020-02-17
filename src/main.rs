@@ -28,7 +28,7 @@ mod terrain;
 mod camera;
 
 use cgmath::{Matrix4, SquareMatrix};
-use crate::terrain::{Terrain, Vertex};
+use crate::terrain::{Terrain, Vertex, HeightMap};
 use std::io::Cursor;
 use vulkano::sampler::{Sampler, SamplerAddressMode, MipmapMode, Filter};
 
@@ -51,7 +51,7 @@ fn main() {
                                            [(queue_family, 0.5)].iter().cloned()).unwrap();
     let queue = queues.next().unwrap();
 
-    let terr = Terrain::new(queue.clone());
+    let terr = Terrain::new(queue.clone(), HeightMap::empty(4, 4));
 
     let mut cam = Camera::new();
     let (mut swapchain, images) = {
@@ -93,7 +93,6 @@ fn main() {
             depth_stencil: {depth}
         }
     ).unwrap());
-
 
     let (texture, tex_future) = {
         let png_bytes = include_bytes!("ground.png").to_vec();
@@ -217,7 +216,6 @@ fn main() {
                     .build().unwrap()
                 );
 
-
                 let command_buffer = AutoCommandBufferBuilder::primary_one_time_submit(device.clone(), queue.family()).unwrap()
                     .begin_render_pass(framebuffers[image_num].clone(), false, clear_values).unwrap()
                     .draw_indexed(pipeline.clone(), &dynamic_state, terr.vertices.clone(), terr.indices.clone(), set.clone(), ()).unwrap()
@@ -296,10 +294,10 @@ mod fs {
 				layout(set = 0, binding = 1) uniform sampler2D tex;
 
 				void main() {
-				    vec3 light_pos = normalize(vec3(1.0, 2.0, 1.0));
+				    vec3 light_pos = normalize(vec3(-0.0, 2.0, 1.0));
                     float light_percent = max(-dot(light_pos, in_normal), 0.0);
 
-					f_color = vec4(in_tex, 1.0, 1.0);
+					f_color = texture(tex, in_tex / 10.0) * light_percent;
 				}
 			"
         }

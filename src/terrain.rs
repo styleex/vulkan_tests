@@ -5,6 +5,49 @@ use vulkano::sync::GpuFuture;
 use std::io::Cursor;
 use png::Limits;
 use cgmath::{Vector3, InnerSpace};
+use cgmath::num_traits::clamp;
+
+type HeightFunc = fn (u32, u32) -> f32;
+
+pub struct HeightMap {
+    pub w: u32,
+    pub h: u32,
+    pub get_height: HeightFunc,
+}
+
+impl HeightMap {
+    pub fn new() -> HeightMap {
+        let data = include_bytes!("heightmap.png").to_vec();
+        let cursor = Cursor::new(data);
+        let decoder = png::Decoder::new(cursor);
+
+        let (info, mut reader) = decoder.read_info().unwrap();
+        let mut image_data = Vec::new();
+        image_data.resize((info.width * info.height * 4) as usize, 0);
+        reader.next_frame(&mut image_data).unwrap();
+
+        let w = info.width;
+        let h = info.height;
+        HeightMap{
+            w: info.width,
+            h: info.height,
+            get_height: |x: u32, y: u32| -> f32 {
+                let xx = clamp(x, 0, w);
+                let yy = clamp(y, 0, h);
+
+                4.0 * (image_data[(w * yy * 4  + xx * 4) as usize] as f32) / 255.0
+            },
+        }
+    }
+
+    pub fn empty(w: u32, h: u32) -> HeightMap {
+        HeightMap{
+            w,
+            h,
+            get_height: |_, _| -> f32 { 0.0 }
+        }
+    }
+}
 
 #[derive(Default, Debug, Clone)]
 pub struct Vertex {
@@ -20,83 +63,31 @@ pub struct Terrain {
 }
 
 impl Terrain {
-    pub fn new(queue: Arc<vulkano::device::Queue>) -> Terrain {
-        let data = include_bytes!("heightmap.png").to_vec();
-        let cursor = Cursor::new(data);
-        let decoder = png::Decoder::new_with_limits(cursor, Limits{bytes: 20*1024*1024*1024});
+    pub fn new(queue: Arc<vulkano::device::Queue>, height_map: HeightMap) -> Terrain {
+        let w= height_map.w;
+        let h = height_map.h;
 
-        let (info, mut reader) = decoder.read_info().unwrap();
-        let mut image_data = Vec::new();
-        image_data.resize((info.width * info.height * 4) as usize, 0);
-        reader.next_frame(&mut image_data).unwrap();
+        let mut vertices = Vec::with_capacity((h * w) as usize);
+        let mut indices = Vec::with_capacity((h * (w - 1) * 6) as usize);
 
-        let w = info.width;
-        let h = info.height;
-
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
-
-//        vertices.push(Vertex { position: [-0.5, -0.25, -0.2] });
-//        vertices.push(Vertex { position: [0.0, 0.5, -0.2] });
-//        vertices.push(Vertex { position: [0.25, -0.1, -0.2] });
-//
-//        indices.push(2_u32);
-//        indices.push(1_u32);
-//        indices.push(0_u32);
-
-        let get_height = |xx: u32, yy: u32| -> f32 {  -4.0*(image_data[(yy*4*w + 4*xx) as usize] as f32) / 255.0 };
-
-
+        // TODO: Triangle strip;
         for y in 0..h {
             for x in 0..w {
-                let height = get_height(x, y);
+                let height = height_map.get_height(x, y);
 
-                let l = {
-                    if x == 0 {
-                        get_height(x, y)
-                    } else {
-                        get_height(x - 1, y)
-                    }
-                };
+                let l = height_map.get_height(x - 1, y);
+                let r = height_map.get_height(x + 1, y);
+                let t = height_map.get_height(x, y + 1);
+                let b = height_map.get_height(x, y - 1);
+                let normal = Vector3 { x: 2.0 * (l - r), y: 2.0 * (t - b), z: -4.0 }.normalize();
 
-                let r = {
-                    if x >= (w-1) {
-                        get_height(x, y)
-                    } else {
-                        get_height(x + 1, y)
-                    }
-                };
-
-                let t = {
-                    if y >= (h-1) {
-                        get_height(x, y)
-                    } else {
-                        get_height(x, y + 1)
-                    }
-                };
-
-                let b = {
-                    if y == 0 {
-                        get_height(x, y)
-                    } else {
-                        get_height(x, y - 1)
-                    }
-                };
-
-                let normal = Vector3{x: 2.0*(l-r), y: 2.0*(t-b), z: -4.0}.normalize();
-
-                println!("{:?} {:?}", x, y);
                 vertices.push(Vertex {
-                    position: [(x as f32), height, (y as f32)],
+                    position: [(x as f32) * 0.1, height, (y as f32) * 0.1],
                     normal: normal.into(),
                     texcoord: [x as f32, y as f32],
                 });
             }
         }
-
-//		auto heightD = getPixelHeight(heightMapData, m_width, i, j - 1);
-//		auto heightU = getPixelHeight(heightMapData, m_width, i, j + 1);
-//		glm::vec3 normalVector = glm::normalize(glm::vec3(heightL - heightR, 1.0f, heightD - heightU))
 
         for y in 1..(h) {
             for x in 0..(w - 1) {
@@ -114,14 +105,11 @@ impl Terrain {
             ImmutableBuffer::from_iter(vertices.iter().cloned(), BufferUsage::vertex_buffer(), queue.clone()).unwrap()
         };
 
-        fut.then_signal_fence_and_flush().unwrap().wait(None).unwrap();
-
-
         let (ib, fut2) = {
             ImmutableBuffer::from_iter(indices.iter().cloned(), BufferUsage::index_buffer(), queue.clone()).unwrap()
         };
 
-        fut2.then_signal_fence_and_flush().unwrap().wait(None).unwrap();
+        fut2.join(fut).then_signal_fence_and_flush().unwrap().wait(None).unwrap();
         Terrain {
             vertices: bb,
             indices: ib,
