@@ -161,13 +161,14 @@ fn main() {
 
                 let world = Matrix4::identity();
 
-                let d = terr.draw([800, 600], world, cam.view_matrix(), cam.proj_matrix());
+                let dimensions: [u32; 2] = surface.window().inner_size().into();
+                let d = terr.draw(dimensions, world, cam.view_matrix(), cam.proj_matrix());
 
-                let d2 = cube.draw([800, 600], world, cam.view_matrix(), cam.proj_matrix());
+                let d2 = cube.draw(dimensions, world, cam.view_matrix(), cam.proj_matrix());
                 let command_buffer = unsafe {
                     AutoCommandBufferBuilder::primary_one_time_submit(device.clone(), queue.family()).unwrap()
                         .begin_render_pass(framebuffers[image_num].clone(), false, clear_values).unwrap()
-//                        .execute_commands(d).unwrap()
+                        .execute_commands(d).unwrap()
                         .execute_commands(d2).unwrap()
                         .end_render_pass().unwrap()
                         .build().unwrap()

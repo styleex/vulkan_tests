@@ -58,11 +58,11 @@ impl Camera {
     pub fn handle_keyboard(&mut self, input: KeyboardInput) {
         if input.state == ElementState::Pressed {
             match input.virtual_keycode {
-                Some(VirtualKeyCode::W) => self.position += self.view_dir * 0.1,
-                Some(VirtualKeyCode::S) => self.position -= self.view_dir * 0.1,
+                Some(VirtualKeyCode::W) => self.position += self.view_dir * 0.3,
+                Some(VirtualKeyCode::S) => self.position -= self.view_dir * 0.3,
 
-                Some(VirtualKeyCode::A) => self.position -= self.view_dir.cross(self.up_dir) * 0.1,
-                Some(VirtualKeyCode::D) => self.position += self.view_dir.cross(self.up_dir) * 0.1,
+                Some(VirtualKeyCode::A) => self.position -= self.view_dir.cross(self.up_dir) * 0.3,
+                Some(VirtualKeyCode::D) => self.position += self.view_dir.cross(self.up_dir) * 0.3,
                 Some(VirtualKeyCode::Space) => self.position.y += 0.1,
                 Some(VirtualKeyCode::LShift) => self.position.y -= 0.1,
                 _ => (),

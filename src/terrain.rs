@@ -65,7 +65,7 @@ impl HeightMap {
         let yy = clamp(y, 0, (self.h - 1) as i32);
         let fn_ = &self.height_fn;
 
-        fn_(xx as u32, yy as u32)
+        -fn_(xx as u32, yy as u32)
     }
 }
 
@@ -99,18 +99,38 @@ impl Terrain {
         let mut vertices = Vec::with_capacity((h * w) as usize);
         let mut indices = Vec::with_capacity((h * (w - 1) * 6) as usize);
 
+        let get_pos = |x: i32, y: i32| -> Vector3<f32> {
+            let height = height_map.get_height(x, y);
+            Vector3::new((x as f32) * 0.1, height, -(y as f32) * 0.1)
+        };
+
         for y in 0..(h as i32) {
             for x in 0..(w as i32) {
-                let height = height_map.get_height(x, y);
+                let pos = get_pos(x, y);
 
-                let l = height_map.get_height(x - 1, y);
-                let r = height_map.get_height(x + 1, y);
-                let t = height_map.get_height(x, y + 1);
-                let b = height_map.get_height(x, y - 1);
-                let normal = Vector3 { x: 2.0 * (l - r), y: 2.0 * (t - b), z: -4.0 }.normalize();
+                // Bottom left, Bottom right, Upper left
+                let l = get_pos(x-1, y) - pos;
+                let t = get_pos(x, y+1) - pos;
+                let r = get_pos(x+1, y) - pos;
+                let b = get_pos(x, y-1) - pos;
+
+                let lb = l.cross(b).normalize();
+                let br = b.cross(r).normalize();
+                let rt = r.cross(t).normalize();
+                let tl = t.cross(l).normalize();
+
+                let normal = -(lb + br + rt + tl).normalize();
+//
+//                let height = height_map.get_height(x, y);
+//
+//                let l = height_map.get_height(x - 1, y);
+//                let r = height_map.get_height(x + 1, y);
+//                let t = height_map.get_height(x, y + 1);
+//                let b = height_map.get_height(x, y - 1);
+//                let normal = Vector3 { x: 2.0 * (l - r), y: 2.0 * (t - b), z: -4.0 }.normalize();
 
                 vertices.push(Vertex {
-                    position: [(x as f32) * 0.1, height, (y as f32) * 0.1],
+                    position: pos.into(), //[(x as f32) * 0.1, height, -(y as f32) * 0.1],
                     normal: normal.into(),
                     texcoord: [x as f32, y as f32],
                 });
@@ -120,11 +140,11 @@ impl Terrain {
         for y in 1..(h) {
             for x in 0..(w - 1) {
                 indices.push((y - 1) * w + x);
-                indices.push((y) * w + x);
                 indices.push((y - 1) * w + x + 1);
+                indices.push((y) * w + x);
 
-                indices.push((y - 1) * w + x + 1);
                 indices.push((y) * w + x);
+                indices.push((y - 1) * w + x + 1);
                 indices.push((y) * w + x + 1);
             }
         }
@@ -152,7 +172,7 @@ impl Terrain {
                 .viewports_dynamic_scissors_irrelevant(1)
                 .fragment_shader(fs.main_entry_point(), ())
                 .render_pass(subpass)
-                .cull_mode_front()
+                .cull_mode_back()
                 .front_face_counter_clockwise()
 //        .polygon_mode_line()
                 .depth_stencil_simple_depth()
@@ -281,10 +301,10 @@ mod fs {
             layout(set = 0, binding = 1) uniform sampler2D tex;
 
             void main() {
-                vec3 light_pos = normalize(vec3(-0.0, 2.0, 1.0));
+                vec3 light_pos = normalize(vec3(0.2, 0.2, 0.2));
                 float light_percent = max(-dot(light_pos, in_normal), 0.0);
 
-                f_color = texture(tex, in_tex / 10.0) * light_percent;
+                f_color = texture(tex, in_tex / 10.0) * min(0.35+light_percent, 1.0);
             }
         "
     }
