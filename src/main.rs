@@ -30,6 +30,11 @@ mod camera;
 use cgmath::{Matrix4, SquareMatrix};
 use crate::terrain::{Terrain, Vertex, HeightMap};
 use std::io::Cursor;
+use crate::block_render::BlockRender;
+
+mod terrain_game;
+mod block_render;
+
 
 fn main() {
     let required_extensions = vulkano_win::required_extensions();
@@ -91,8 +96,9 @@ fn main() {
     let mut dynamic_state = DynamicState { line_width: None, viewports: None, scissors: None, compare_mask: None, write_mask: None, reference: None };
 
     let terr = Terrain::new(queue.clone(), HeightMap::from_png(), Subpass::from(render_pass.clone(), 0).unwrap());
-    let mut framebuffers = window_size_dependent_setup(&images, render_pass.clone(), &mut dynamic_state, queue.clone());
+    let cube = BlockRender::new(queue.clone(), Subpass::from(render_pass.clone(), 0).unwrap());
 
+    let mut framebuffers = window_size_dependent_setup(&images, render_pass.clone(), &mut dynamic_state, queue.clone());
     let mut recreate_swapchain = false;
 
     let mut previous_frame_end = Some(Box::new(sync::now(device.clone())) as Box<dyn GpuFuture>);
@@ -157,10 +163,12 @@ fn main() {
 
                 let d = terr.draw([800, 600], world, cam.view_matrix(), cam.proj_matrix());
 
+                let d2 = cube.draw([800, 600], world, cam.view_matrix(), cam.proj_matrix());
                 let command_buffer = unsafe {
                     AutoCommandBufferBuilder::primary_one_time_submit(device.clone(), queue.family()).unwrap()
                         .begin_render_pass(framebuffers[image_num].clone(), false, clear_values).unwrap()
-                        .execute_commands(d).unwrap()
+//                        .execute_commands(d).unwrap()
+                        .execute_commands(d2).unwrap()
                         .end_render_pass().unwrap()
                         .build().unwrap()
                 };

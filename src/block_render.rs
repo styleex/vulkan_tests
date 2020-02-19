@@ -13,121 +13,95 @@ use vulkano::image::{ImmutableImage, Dimensions, ImageViewAccess};
 use vulkano::sampler::{Sampler, Filter, SamplerAddressMode, MipmapMode};
 use vulkano::format::Format;
 
+use genmesh::generators::Cube;
+use genmesh::MapToVertices;
+use genmesh::Triangulate;
+use genmesh::Vertices;
 
-pub struct HeightMap {
-    pub w: u32,
-    pub h: u32,
-    height_fn: Box<dyn Fn(u32, u32) -> f32>,
-}
-
-impl HeightMap {
-    pub fn from_png() -> HeightMap {
-        let data = include_bytes!("static/heightmap.png").to_vec();
-        let cursor = Cursor::new(data);
-        let decoder = png::Decoder::new(cursor);
-
-        let (info, mut reader) = decoder.read_info().unwrap();
-        let mut image_data = Vec::new();
-        image_data.resize((info.width * info.height * 4) as usize, 0);
-        reader.next_frame(&mut image_data).unwrap();
-
-        let w = info.width;
-        HeightMap {
-            w: info.width,
-            h: info.height,
-            height_fn: Box::new(move |x: u32, y: u32| -> f32 {
-                4.0 * (image_data[(w * y * 4 + x * 4) as usize] as f32) / 255.0
-            }),
-        }
-    }
-
-    pub fn empty(w: u32, h: u32) -> HeightMap {
-        HeightMap {
-            w,
-            h,
-            height_fn: Box::new(|_, _| -> f32 { 0.0 }),
-        }
-    }
-
-    pub fn get_height(&self, x: i32, y: i32) -> f32 {
-        let clamp = |val: i32, min: i32, max: i32| -> i32 {
-            if val < min {
-                return min;
-            }
-            if val > max {
-                return max;
-            }
-
-            return val;
-        };
-
-        let xx = clamp(x, 0, (self.w - 1) as i32);
-        let yy = clamp(y, 0, (self.h - 1) as i32);
-        let fn_ = &self.height_fn;
-
-        fn_(xx as u32, yy as u32)
-    }
-}
 
 #[derive(Default, Debug, Clone)]
 pub struct Vertex {
     position: [f32; 3],
     normal: [f32; 3],
-    texcoord: [f32; 2],
+    color: [f32; 3],
 }
-vulkano::impl_vertex!(Vertex, position, normal, texcoord);
+vulkano::impl_vertex!(Vertex, position, normal, color);
 
-pub struct Terrain {
+pub struct BlockRender {
     gfx_queue: Arc<Queue>,
     pipeline: Arc<dyn GraphicsPipelineAbstract + Send + Sync>,
     uniform_buffer: CpuBufferPool<vs::ty::Data>,
 
-    texture: Arc<dyn ImageViewAccess + Send + Sync>,
-    sampler: Arc<Sampler>,
     pub vertices: Arc<ImmutableBuffer<[Vertex]>>,
     pub indices: Arc<ImmutableBuffer<[u32]>>,
-
 }
 
-impl Terrain {
-    pub fn new<R>(gfx_queue: Arc<Queue>, height_map: HeightMap, subpass: Subpass<R>) -> Terrain
+impl BlockRender {
+    pub fn new<R>(gfx_queue: Arc<Queue>, subpass: Subpass<R>) -> BlockRender
         where R: RenderPassAbstract + Send + Sync + 'static
     {
-        let w = height_map.w;
-        let h = height_map.h;
+        let h = 1.0_f32;
 
-        let mut vertices = Vec::with_capacity((h * w) as usize);
-        let mut indices = Vec::with_capacity((h * (w - 1) * 6) as usize);
+        let vertices = [
+            // up
+            Vertex { position: [0.0, -h, 0.0], normal: [0.0, 1.0, 0.0], color: [0.0, 1.0, 0.0] },
+            Vertex { position: [0.0, -h, -1.0], normal: [0.0, 1.0, 0.0], color: [0.0, 1.0, 0.0] },
+            Vertex { position: [1.0, -h, -1.0], normal: [0.0, 1.0, 0.0], color: [0.0, 1.0, 0.0] },
+            Vertex { position: [1.0, -h, 0.0], normal: [0.0, 1.0, 0.0], color: [0.0, 1.0, 0.0] },
 
-        for y in 0..(h as i32) {
-            for x in 0..(w as i32) {
-                let height = height_map.get_height(x, y);
+            // bottom
+            Vertex { position: [0.0, 0.0, 0.0], normal: [0.0, -1.0, 0.0], color: [1.0, 1.0, 1.0] },
+            Vertex { position: [0.0, 0.0, -1.0], normal: [0.0, -1.0, 0.0], color: [1.0, 1.0, 1.0] },
+            Vertex { position: [1.0, 0.0, -1.0], normal: [0.0, -1.0, 0.0], color: [1.0, 1.0, 1.0] },
+            Vertex { position: [1.0, 0.0, 0.0], normal: [0.0, -1.0, 0.0], color: [1.0, 1.0, 1.0] },
 
-                let l = height_map.get_height(x - 1, y);
-                let r = height_map.get_height(x + 1, y);
-                let t = height_map.get_height(x, y + 1);
-                let b = height_map.get_height(x, y - 1);
-                let normal = Vector3 { x: 2.0 * (l - r), y: 2.0 * (t - b), z: -4.0 }.normalize();
+            // front
+            Vertex { position: [0.0, 0.0, 0.0], normal: [0.0, 0.0, 1.0], color: [1.0, 0.0, 0.0] },
+            Vertex { position: [0.0, -h, 0.0], normal: [0.0, 0.0, 1.0], color: [1.0, 0.0, 0.0] },
+            Vertex { position: [1.0, -h, 0.0], normal: [0.0, 0.0, 1.0], color: [1.0, 0.0, 0.0] },
+            Vertex { position: [1.0, 0.0, 0.0], normal: [0.0, 0.0, 1.0], color: [1.0, 0.0, 0.0] },
 
-                vertices.push(Vertex {
-                    position: [(x as f32) * 0.1, height, (y as f32) * 0.1],
-                    normal: normal.into(),
-                    texcoord: [x as f32, y as f32],
-                });
-            }
-        }
+            // back
+            Vertex { position: [0.0, 0.0, -1.0], normal: [0.0, 0.0, -1.0], color: [1.0, 1.0, 1.0] },
+            Vertex { position: [0.0, -h, -1.0], normal: [0.0, 0.0, -1.0], color: [1.0, 1.0, 1.0] },
+            Vertex { position: [1.0, -h, -1.0], normal: [0.0, 0.0, -1.0], color: [1.0, 1.0, 1.0] },
+            Vertex { position: [1.0, 0.0, -1.0], normal: [0.0, 0.0, -1.0], color: [1.0, 1.0, 1.0] },
 
-        for y in 1..(h) {
-            for x in 0..(w - 1) {
-                indices.push((y - 1) * w + x);
-                indices.push((y) * w + x);
-                indices.push((y - 1) * w + x + 1);
+            // left
+            Vertex { position: [0.0, 0.0, -1.0], normal: [-1.0, 0.0, 0.0], color: [0.0, 0.0, 1.0] },
+            Vertex { position: [0.0, -h, -1.0], normal: [-1.0, 0.0, 0.0], color: [0.0, 0.0, 1.0] },
+            Vertex { position: [0.0, -h, 0.0], normal: [-1.0, 0.0, 0.0], color: [0.0, 0.0, 1.0] },
+            Vertex { position: [0.0, 0.0, 0.0], normal: [-1.0, 0.0, 0.0], color: [0.0, 0.0, 1.0] },
 
-                indices.push((y - 1) * w + x + 1);
-                indices.push((y) * w + x);
-                indices.push((y) * w + x + 1);
-            }
-        }
+            // right
+            Vertex { position: [1.0, 0.0, 0.0], normal: [1.0, 0.0, 0.0], color: [1.0, 1.0, 1.0] },
+            Vertex { position: [1.0, -h, 0.0], normal: [1.0, 0.0, 0.0], color: [1.0, 1.0, 1.0] },
+            Vertex { position: [1.0, -h, -1.0], normal: [1.0, 0.0, 0.0], color: [1.0, 1.0, 1.0] },
+            Vertex { position: [1.0, 0.0, -1.0], normal: [1.0, 0.0, 0.0], color: [1.0, 1.0, 1.0] },
+        ];
+
+        let indices = [
+            // top
+            0, 3, 1, 1, 3, 2,
+
+            // bottom
+            7, 4, 6, 6, 4, 5,
+
+            // front
+            8, 11, 9, 9, 11, 10,
+
+            // back
+            15, 12, 14, 14, 12, 13,
+
+            //left
+            16, 19, 17, 17, 19, 18,
+
+            //right
+            20, 23, 21, 21, 23, 22,
+        ];
+
+//        let x: Vec<_> = Cube::new().vertex(|v| Vertex { position: v.pos.into(), normal: v.normal.into() }).triangulate().vertices().collect();
+
 
         let (bb, fut) = {
             ImmutableBuffer::from_iter(vertices.iter().cloned(), BufferUsage::vertex_buffer(), gfx_queue.clone()).unwrap()
@@ -137,7 +111,7 @@ impl Terrain {
             ImmutableBuffer::from_iter(indices.iter().cloned(), BufferUsage::index_buffer(), gfx_queue.clone()).unwrap()
         };
 
-        fut2.join(fut).then_signal_fence_and_flush().unwrap().wait(None).unwrap();
+        fut.join(fut2).then_signal_fence_and_flush().unwrap().wait(None).unwrap();
 
         let pipeline = {
             let vs = vs::Shader::load(gfx_queue.device().clone())
@@ -152,9 +126,9 @@ impl Terrain {
                 .viewports_dynamic_scissors_irrelevant(1)
                 .fragment_shader(fs.main_entry_point(), ())
                 .render_pass(subpass)
-                .cull_mode_front()
+                .cull_mode_back()
                 .front_face_counter_clockwise()
-//        .polygon_mode_line()
+                .polygon_mode_line()
                 .depth_stencil_simple_depth()
                 .build(gfx_queue.device().clone())
                 .unwrap())
@@ -162,35 +136,10 @@ impl Terrain {
 
         let uniform_buffer = CpuBufferPool::<vs::ty::Data>::new(gfx_queue.device().clone(), BufferUsage::all());
 
-        let (texture, tex_future) = {
-            let png_bytes = include_bytes!("static/ground.png").to_vec();
-            let cursor = Cursor::new(png_bytes);
-            let decoder = png::Decoder::new(cursor);
-            let (info, mut reader) = decoder.read_info().unwrap();
-            let dimensions = Dimensions::Dim2d { width: info.width, height: info.height };
-            let mut image_data = Vec::new();
-            image_data.resize((info.width * info.height * 4) as usize, 0);
-            reader.next_frame(&mut image_data).unwrap();
-
-            ImmutableImage::from_iter(
-                image_data.iter().cloned(),
-                dimensions,
-                Format::R8G8B8A8Srgb,
-                gfx_queue.clone(),
-            ).unwrap()
-        };
-
-        tex_future.then_signal_fence_and_flush().unwrap().wait(None).unwrap();
-
-        let sampler = Sampler::new(gfx_queue.device().clone(), Filter::Linear, Filter::Linear,
-                                   MipmapMode::Nearest, SamplerAddressMode::Repeat, SamplerAddressMode::Repeat,
-                                   SamplerAddressMode::Repeat, 0.0, 1.0, 0.0, 0.0).unwrap();
-        Terrain {
+        BlockRender {
             gfx_queue,
             pipeline,
             uniform_buffer,
-            sampler,
-            texture,
             vertices: bb,
             indices: ib,
         }
@@ -211,7 +160,6 @@ impl Terrain {
         let layout = self.pipeline.descriptor_set_layout(0).unwrap();
         let set = Arc::new(PersistentDescriptorSet::start(layout.clone())
             .add_buffer(uniform_buffer_subbuffer).unwrap()
-            .add_sampled_image(self.texture.clone(), self.sampler.clone()).unwrap()
             .build().unwrap()
         );
 
@@ -244,7 +192,7 @@ mod vs {
 
             layout(location = 0) in vec3 position;
             layout(location = 1) in vec3 normal;
-            layout(location = 2) in vec2 texcoord;
+            layout(location = 2) in vec3 color;
 
             layout(set = 0, binding = 0) uniform Data {
                 mat4 world;
@@ -254,14 +202,14 @@ mod vs {
 
             layout(location=1) out vec3 rnormal;
             layout(location=2) out vec3 rpos;
-            layout(location=3) out vec2 rtex;
+            layout(location=3) out vec3 out_color;
             void main() {
                 mat4 worldview = uniforms.view;// * uniforms.world;
                 gl_Position = uniforms.proj * worldview * vec4(position, 1.0);
 
                 rpos = position;
                 rnormal = normal;
-                rtex = texcoord;
+                out_color = color;
             }
         "
     }
@@ -276,15 +224,13 @@ mod fs {
             layout(location = 0) out vec4 f_color;
             layout(location = 1) in vec3 in_normal;
             layout(location = 2) in vec3 in_world;
-            layout(location = 3) in vec2 in_tex;
-
-            layout(set = 0, binding = 1) uniform sampler2D tex;
+            layout(location = 3) in vec3 in_color;
 
             void main() {
                 vec3 light_pos = normalize(vec3(-0.0, 2.0, 1.0));
                 float light_percent = max(-dot(light_pos, in_normal), 0.0);
 
-                f_color = texture(tex, in_tex / 10.0) * light_percent;
+                f_color = vec4(in_color, 1.0); vec4(1.0, 1.0, 0.0, 1.0);
             }
         "
     }

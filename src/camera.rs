@@ -23,13 +23,13 @@ pub struct Camera {
 impl Camera {
     pub fn new() -> Camera {
         Camera {
-            position: Point3::new(0.0, -2.0, 0.0),
+            position: Point3::new(0.0, 0.0, 0.0),
             proj: Matrix4::identity(),
             mouse_pressed: false,
             last_mouse_position: [0, 0],
             viewport: [0, 0],
             view_dir: vec3(0.0, 0.0, -1.0),
-            up_dir: vec3(0.0, -1.0, 0.0),
+            up_dir: vec3(0.0, 1.0, 0.0),
             yaw: -90.0,
             pitch: 0.0,
         }
@@ -83,7 +83,7 @@ impl Camera {
 
                 let pos: [i32; 2] = position.into();
                 let sensitivity = 0.5;
-                let dx = -(pos[0] - self.last_mouse_position[0]) as f32 * sensitivity;
+                let dx = (pos[0]- self.last_mouse_position[0]) as f32 * sensitivity;
                 let dy = (pos[1] - self.last_mouse_position[1]) as f32 * sensitivity;
                 self.last_mouse_position = position.into();
 
