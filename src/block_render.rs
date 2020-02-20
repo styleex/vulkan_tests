@@ -13,11 +13,6 @@ use vulkano::image::{ImmutableImage, Dimensions, ImageViewAccess};
 use vulkano::sampler::{Sampler, Filter, SamplerAddressMode, MipmapMode};
 use vulkano::format::Format;
 
-use genmesh::generators::Cube;
-use genmesh::MapToVertices;
-use genmesh::Triangulate;
-use genmesh::Vertices;
-
 
 #[derive(Default, Debug, Clone)]
 pub struct Vertex {
@@ -40,7 +35,7 @@ impl BlockRender {
     pub fn new<R>(gfx_queue: Arc<Queue>, subpass: Subpass<R>) -> BlockRender
         where R: RenderPassAbstract + Send + Sync + 'static
     {
-        let h = 1.0_f32;
+        let h = 3.0_f32;
 
         let vertices = [
             // up

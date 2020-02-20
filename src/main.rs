@@ -31,10 +31,13 @@ use cgmath::{Matrix4, SquareMatrix};
 use crate::terrain::{Terrain, Vertex, HeightMap};
 use std::io::Cursor;
 use crate::block_render::BlockRender;
+use crate::terrain_game::Map;
+use crate::terrain_render_system::TerrainRenderSystem;
 
 mod terrain_game;
 mod block_render;
-
+mod terrain_render_system;
+mod cube;
 
 fn main() {
     let required_extensions = vulkano_win::required_extensions();
@@ -95,8 +98,12 @@ fn main() {
 
     let mut dynamic_state = DynamicState { line_width: None, viewports: None, scissors: None, compare_mask: None, write_mask: None, reference: None };
 
-    let terr = Terrain::new(queue.clone(), HeightMap::from_png(), Subpass::from(render_pass.clone(), 0).unwrap());
-    let cube = BlockRender::new(queue.clone(), Subpass::from(render_pass.clone(), 0).unwrap());
+//    let terr = Terrain::new(queue.clone(), HeightMap::from_png(), Subpass::from(render_pass.clone(), 0).unwrap());
+//    let cube = BlockRender::new(queue.clone(), Subpass::from(render_pass.clone(), 0).unwrap());
+
+
+    let terrain_map = Arc::new(Map::new(10, 10));
+    let mut terrain_rs = TerrainRenderSystem::new(queue.clone(), Subpass::from(render_pass.clone(), 0).unwrap());
 
     let mut framebuffers = window_size_dependent_setup(&images, render_pass.clone(), &mut dynamic_state, queue.clone());
     let mut recreate_swapchain = false;
@@ -162,14 +169,17 @@ fn main() {
                 let world = Matrix4::identity();
 
                 let dimensions: [u32; 2] = surface.window().inner_size().into();
-                let d = terr.draw(dimensions, world, cam.view_matrix(), cam.proj_matrix());
+//                let d = terr.draw(dimensions, world, cam.view_matrix(), cam.proj_matrix());
+//
+//                let d2 = cube.draw(dimensions, world, cam.view_matrix(), cam.proj_matrix());
 
-                let d2 = cube.draw(dimensions, world, cam.view_matrix(), cam.proj_matrix());
+                let d3 = terrain_rs.render(terrain_map.clone(), dimensions, world, cam.view_matrix(), cam.proj_matrix());
                 let command_buffer = unsafe {
                     AutoCommandBufferBuilder::primary_one_time_submit(device.clone(), queue.family()).unwrap()
                         .begin_render_pass(framebuffers[image_num].clone(), false, clear_values).unwrap()
-                        .execute_commands(d).unwrap()
-                        .execute_commands(d2).unwrap()
+//                        .execute_commands(d).unwrap()
+//                        .execute_commands(d2).unwrap()
+                        .execute_commands(d3).unwrap()
                         .end_render_pass().unwrap()
                         .build().unwrap()
                 };

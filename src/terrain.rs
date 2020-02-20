@@ -120,14 +120,6 @@ impl Terrain {
                 let tl = t.cross(l).normalize();
 
                 let normal = -(lb + br + rt + tl).normalize();
-//
-//                let height = height_map.get_height(x, y);
-//
-//                let l = height_map.get_height(x - 1, y);
-//                let r = height_map.get_height(x + 1, y);
-//                let t = height_map.get_height(x, y + 1);
-//                let b = height_map.get_height(x, y - 1);
-//                let normal = Vector3 { x: 2.0 * (l - r), y: 2.0 * (t - b), z: -4.0 }.normalize();
 
                 vertices.push(Vertex {
                     position: pos.into(), //[(x as f32) * 0.1, height, -(y as f32) * 0.1],
@@ -186,7 +178,7 @@ impl Terrain {
             let png_bytes = include_bytes!("static/ground.png").to_vec();
             let cursor = Cursor::new(png_bytes);
             let decoder = png::Decoder::new(cursor);
-            let (info, mut reader) = decoder.read_info().unwrap();
+            let (info, mut  reader) = decoder.read_info().unwrap();
             let dimensions = Dimensions::Dim2d { width: info.width, height: info.height };
             let mut image_data = Vec::new();
             image_data.resize((info.width * info.height * 4) as usize, 0);
@@ -204,7 +196,7 @@ impl Terrain {
 
         let sampler = Sampler::new(gfx_queue.device().clone(), Filter::Linear, Filter::Linear,
                                    MipmapMode::Nearest, SamplerAddressMode::Repeat, SamplerAddressMode::Repeat,
-                                   SamplerAddressMode::Repeat, 0.0, 1.0, 0.0, 0.0).unwrap();
+                                   SamplerAddressMode::Repeat, 0.0, 5.0, 0.0, 0.0).unwrap();
         Terrain {
             gfx_queue,
             pipeline,
@@ -304,7 +296,7 @@ mod fs {
                 vec3 light_pos = normalize(vec3(0.2, 0.2, 0.2));
                 float light_percent = max(-dot(light_pos, in_normal), 0.0);
 
-                f_color = texture(tex, in_tex / 10.0) * min(0.35+light_percent, 1.0);
+                f_color = texture(tex, in_tex / 25.0) * min(0.35+light_percent, 1.0);
             }
         "
     }

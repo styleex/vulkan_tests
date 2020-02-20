@@ -1,20 +1,21 @@
 #[derive(Clone)]
-enum BlockState {
+pub enum BlockState {
     Normal,   // Стена
     Cleared,  // Есть проход
 }
 
 #[derive(Clone)]
 pub struct TerrainBlock {
-    x: u32,
-    y: u32,
-    state: BlockState,
+    pub id: u32,
+    pub x: u32,
+    pub y: u32,
+    pub state: BlockState,
 }
 
 pub struct Map {
-    w: u32,
-    h: u32,
-    blocks: Vec<TerrainBlock>,
+    pub w: u32,
+    pub h: u32,
+    pub blocks: Vec<TerrainBlock>,
 }
 
 impl Map {
@@ -23,7 +24,11 @@ impl Map {
 
         for y in 0..h {
             for x in 0..w {
-                blocks.push(TerrainBlock{x, y, state: BlockState::Normal});
+                if x == 3 || y == 3{
+                    continue;
+                }
+
+                blocks.push(TerrainBlock{x, y, state: BlockState::Normal, id: y * (w) + x});
             }
         }
 
