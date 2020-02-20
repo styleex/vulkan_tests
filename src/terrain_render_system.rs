@@ -17,8 +17,9 @@ use vulkano::pipeline::viewport::Viewport;
 #[derive(Default, Debug, Clone)]
 struct InstanceData {
     position_offset: [f32; 2],
+    object_id: [f32; 4],
 }
-impl_vertex!(InstanceData, position_offset);
+impl_vertex!(InstanceData, position_offset, object_id);
 
 pub struct TerrainRenderSystem {
     gfx_queue: Arc<Queue>,
@@ -82,7 +83,6 @@ impl TerrainRenderSystem {
             self.uniform_buffer.next(uniform_data).unwrap()
         };
 
-
         let layout = self.pipeline.descriptor_set_layout(0).unwrap();
         let set = Arc::new(PersistentDescriptorSet::start(layout.clone())
             .add_buffer(uniform_buffer_subbuffer).unwrap()
@@ -113,7 +113,16 @@ impl TerrainRenderSystem {
         let mut instance_data = Vec::<InstanceData>::new();
 
         for block in blocks {
-            instance_data.push(InstanceData { position_offset: [block.x as f32, block.y as f32] });
+            let id = block.id;
+            let x = [((id & 0xFF) as f32) / 255.0,
+                ((id >> 8) & 0xFF) as f32 / 255.0,
+                ((id >> 16) & 0xFF) as f32 / 255.0,
+                1.0];
+
+            instance_data.push(InstanceData {
+                position_offset: [block.x as f32, block.y as f32],
+                object_id: x,
+            });
         }
 
         let (bb, fut) = {
@@ -138,7 +147,7 @@ mod vs {
             layout(location = 2) in vec3 color;
 
             layout(location = 3) in vec2 position_offset;
-
+            layout(location = 4) in vec4 object_id;
 
             layout(set = 0, binding = 0) uniform Data {
                 mat4 world;
@@ -149,6 +158,7 @@ mod vs {
             layout(location=1) out vec3 rnormal;
             layout(location=2) out vec3 rpos;
             layout(location=3) out vec3 out_color;
+            layout(location=4) out vec4 out_object_id;
             void main() {
                 mat4 worldview = uniforms.view;// * uniforms.world;
                 vec3 s_pos = position;
@@ -159,6 +169,7 @@ mod vs {
                 rpos = s_pos;
                 rnormal = normal;
                 out_color = color;
+                out_object_id = object_id;
             }
         "
     }
@@ -171,15 +182,20 @@ mod fs {
             #version 450
 
             layout(location = 0) out vec4 f_color;
+            layout(location = 2) out vec4 f_object_id;
+
+
             layout(location = 1) in vec3 in_normal;
             layout(location = 2) in vec3 in_world;
             layout(location = 3) in vec3 in_color;
+            layout(location = 4) in vec4 in_object_id;
 
             void main() {
                 vec3 light_pos = normalize(vec3(-0.0, 2.0, 1.0));
                 float light_percent = max(-dot(light_pos, in_normal), 0.0);
 
                 f_color = vec4(in_color, 1.0); vec4(1.0, 1.0, 0.0, 1.0);
+                f_object_id = in_object_id;
             }
         "
     }

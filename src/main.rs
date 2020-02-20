@@ -18,7 +18,7 @@ use vulkano::descriptor::descriptor_set::PersistentDescriptorSet;
 use vulkano_win::VkSurfaceBuild;
 use winit::window::{WindowBuilder, Window};
 use winit::event_loop::{EventLoop, ControlFlow};
-use winit::event::{Event, WindowEvent};
+use winit::event::{Event, WindowEvent, MouseButton};
 
 use std::sync::Arc;
 use crate::camera::Camera;
@@ -26,6 +26,7 @@ use winit::event::{ElementState, VirtualKeyCode};
 
 mod terrain;
 mod camera;
+mod deferred;
 
 use cgmath::{Matrix4, SquareMatrix};
 use crate::terrain::{Terrain, Vertex, HeightMap};
@@ -38,6 +39,14 @@ mod terrain_game;
 mod block_render;
 mod terrain_render_system;
 mod cube;
+
+fn get_entity_id(r: u8, g: u8, b: u8, a: u8) -> Option<usize> {
+    if a == 0 {
+        None
+    } else {
+        Some((r as usize) | (g as usize) << 8 | (b as usize) << 16)
+    }
+}
 
 fn main() {
     let required_extensions = vulkano_win::required_extensions();
@@ -74,39 +83,13 @@ fn main() {
                        PresentMode::Fifo, FullscreenExclusive::Default, true, ColorSpace::SrgbNonLinear).unwrap()
     };
 
-    let render_pass = Arc::new(vulkano::single_pass_renderpass!(
-        device.clone(),
-        attachments: {
-            color: {
-                load: Clear,
-                store: Store,
-                format: swapchain.format(),
-                samples: 1,
-            },
-            depth: {
-                load: Clear,
-                store: DontCare,
-                format: Format::D16Unorm,
-                samples: 1,
-            }
-        },
-        pass: {
-            color: [color],
-            depth_stencil: {depth}
-        }
-    ).unwrap());
-
-    let mut dynamic_state = DynamicState { line_width: None, viewports: None, scissors: None, compare_mask: None, write_mask: None, reference: None };
-
-//    let terr = Terrain::new(queue.clone(), HeightMap::from_png(), Subpass::from(render_pass.clone(), 0).unwrap());
-//    let cube = BlockRender::new(queue.clone(), Subpass::from(render_pass.clone(), 0).unwrap());
-
-
+    let mut frame_system = deferred::FrameSystem::new(queue.clone(), swapchain.format());
     let terrain_map = Arc::new(Map::new(10, 10));
-    let mut terrain_rs = TerrainRenderSystem::new(queue.clone(), Subpass::from(render_pass.clone(), 0).unwrap());
+    let mut terrain_rs = TerrainRenderSystem::new(queue.clone(), frame_system.deferred_subpass());
 
-    let mut framebuffers = window_size_dependent_setup(&images, render_pass.clone(), &mut dynamic_state, queue.clone());
+    let world = Matrix4::identity();
     let mut recreate_swapchain = false;
+    let mut cursor_pos = [0, 0];
 
     let mut previous_frame_end = Some(Box::new(sync::now(device.clone())) as Box<dyn GpuFuture>);
     event_loop.run(move |event, _, control_flow| {
@@ -133,6 +116,22 @@ fn main() {
 
                 cam.handle_keyboard(input);
             }
+            Event::WindowEvent { event: WindowEvent::CursorMoved { position, .. }, ..} => {
+                cursor_pos = [position.x as u32, position.y as u32];
+            }
+            Event::WindowEvent { event: WindowEvent::MouseInput { state, button, .. }, ..} => {
+                if (state == ElementState::Pressed) && (button == MouseButton::Left) {
+                    let buffer_content = frame_system.object_id_cpu.read().unwrap();
+                    let buf_pos = 4 * (cursor_pos[1] * (1600) + cursor_pos[0]) as usize;
+
+                    let entity_id = get_entity_id(
+                        buffer_content[buf_pos],
+                        buffer_content[buf_pos + 1],
+                        buffer_content[buf_pos + 2],
+                        buffer_content[buf_pos + 3],
+                    );
+                }
+            }
 
             Event::RedrawEventsCleared => {
                 previous_frame_end.as_mut().unwrap().cleanup_finished();
@@ -146,7 +145,6 @@ fn main() {
                     };
 
                     swapchain = new_swapchain;
-                    framebuffers = window_size_dependent_setup(&new_images, render_pass.clone(), &mut dynamic_state, queue.clone());
                     cam.set_viewport(dimensions[0], dimensions[1]);
                     recreate_swapchain = false;
                 }
@@ -164,29 +162,30 @@ fn main() {
                     recreate_swapchain = true;
                 }
 
-                let clear_values = vec!([0.0, 0.0, 0.0, 1.0].into(), 1.0f32.into());
+                let future = previous_frame_end.take().unwrap().join(acquire_future);
+                let mut frame = frame_system.frame(future, images[image_num].clone(), Matrix4::identity());
+                let mut after_future = None;
+                while let Some(pass) = frame.next_pass() {
+                    match pass {
+                        deferred::Pass::Deferred(mut draw_pass) => {
+                            let cb = terrain_rs.render(terrain_map.clone(), draw_pass.viewport_dimensions(),
+                                                       world, cam.view_matrix(), cam.proj_matrix());
+                            draw_pass.execute(cb);
+                        }
+                        deferred::Pass::Lighting(mut lighting) => {
+                            lighting.ambient_light([1.0, 1.0, 1.0]);
+//                            lighting.directional_light(Vector3::new(0.2, -0.1, -0.7), [0.6, 0.6, 0.6]);
+//                            lighting.point_light(Vector3::new(0.5, -0.5, -0.1), [1.0, 0.0, 0.0]);
+//                            lighting.point_light(Vector3::new(-0.9, 0.2, -0.15), [0.0, 1.0, 0.0]);
+//                            lighting.point_light(Vector3::new(0.0, 0.5, -0.05), [0.0, 0.0, 1.0]);
+                        }
+                        deferred::Pass::Finished(af) => {
+                            after_future = Some(af);
+                        }
+                    }
+                }
 
-                let world = Matrix4::identity();
-
-                let dimensions: [u32; 2] = surface.window().inner_size().into();
-//                let d = terr.draw(dimensions, world, cam.view_matrix(), cam.proj_matrix());
-//
-//                let d2 = cube.draw(dimensions, world, cam.view_matrix(), cam.proj_matrix());
-
-                let d3 = terrain_rs.render(terrain_map.clone(), dimensions, world, cam.view_matrix(), cam.proj_matrix());
-                let command_buffer = unsafe {
-                    AutoCommandBufferBuilder::primary_one_time_submit(device.clone(), queue.family()).unwrap()
-                        .begin_render_pass(framebuffers[image_num].clone(), false, clear_values).unwrap()
-//                        .execute_commands(d).unwrap()
-//                        .execute_commands(d2).unwrap()
-                        .execute_commands(d3).unwrap()
-                        .end_render_pass().unwrap()
-                        .build().unwrap()
-                };
-
-                let future = previous_frame_end.take().unwrap()
-                    .join(acquire_future)
-                    .then_execute(queue.clone(), command_buffer).unwrap()
+                let future = after_future.unwrap()
                     .then_swapchain_present(queue.clone(), swapchain.clone(), image_num)
                     .then_signal_fence_and_flush();
 
@@ -207,40 +206,4 @@ fn main() {
             _ => ()
         }
     });
-}
-
-/// This method is called once during initialization, then again whenever the window is resized
-fn window_size_dependent_setup(
-    images: &[Arc<SwapchainImage<Window>>],
-    render_pass: Arc<dyn RenderPassAbstract + Send + Sync>,
-    dynamic_state: &mut DynamicState,
-    gfx_queue: Arc<vulkano::device::Queue>,
-) -> Vec<Arc<dyn FramebufferAbstract + Send + Sync>> {
-    let dimensions = images[0].dimensions();
-
-    let viewport = Viewport {
-        origin: [0.0, 0.0],
-        dimensions: [dimensions[0] as f32, dimensions[1] as f32],
-        depth_range: 0.0..1.0,
-    };
-    dynamic_state.viewports = Some(vec!(viewport));
-    let atch_usage = ImageUsage {
-        transient_attachment: true,
-        input_attachment: true,
-        ..ImageUsage::none()
-    };
-    let depth_buffer = AttachmentImage::with_usage(gfx_queue.device().clone(),
-                                                   [dimensions[0], dimensions[1]],
-                                                   Format::D16Unorm,
-                                                   atch_usage)
-        .unwrap();
-
-    images.iter().map(|image| {
-        Arc::new(
-            Framebuffer::start(render_pass.clone())
-                .add(image.clone()).unwrap()
-                .add(depth_buffer.clone()).unwrap()
-                .build().unwrap()
-        ) as Arc<dyn FramebufferAbstract + Send + Sync>
-    }).collect::<Vec<_>>()
 }
