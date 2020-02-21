@@ -39,12 +39,13 @@ mod terrain_game;
 mod block_render;
 mod terrain_render_system;
 mod cube;
+mod mouse_picker;
 
-fn get_entity_id(r: u8, g: u8, b: u8, a: u8) -> Option<usize> {
+fn get_entity_id(r: u8, g: u8, b: u8, a: u8) -> Option<u32> {
     if a == 0 {
         None
     } else {
-        Some((r as usize) | (g as usize) << 8 | (b as usize) << 16)
+        Some(((r as usize) | (g as usize) << 8 | (b as usize) << 16) as u32)
     }
 }
 
@@ -68,7 +69,7 @@ fn main() {
     let queue = queues.next().unwrap();
 
     let mut cam = Camera::new();
-    let (mut swapchain, images) = {
+    let (mut swapchain, mut images) = {
         let caps = surface.capabilities(physical).unwrap();
         let usage = caps.supported_usage_flags;
 
@@ -84,12 +85,14 @@ fn main() {
     };
 
     let mut frame_system = deferred::FrameSystem::new(queue.clone(), swapchain.format());
-    let terrain_map = Arc::new(Map::new(10, 10));
+    let mut terrain_map = Map::new(10, 10);
     let mut terrain_rs = TerrainRenderSystem::new(queue.clone(), frame_system.deferred_subpass());
 
     let world = Matrix4::identity();
     let mut recreate_swapchain = false;
+
     let mut cursor_pos = [0, 0];
+    let mut entity_id: Option<u32> = None;
 
     let mut previous_frame_end = Some(Box::new(sync::now(device.clone())) as Box<dyn GpuFuture>);
     event_loop.run(move |event, _, control_flow| {
@@ -97,7 +100,6 @@ fn main() {
             Event::WindowEvent { event, .. } => cam.handle_event(event),
             _ => (),
         }
-
 
         match event {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
@@ -116,20 +118,21 @@ fn main() {
 
                 cam.handle_keyboard(input);
             }
-            Event::WindowEvent { event: WindowEvent::CursorMoved { position, .. }, ..} => {
+            Event::WindowEvent { event: WindowEvent::CursorMoved { position, .. }, .. } => {
                 cursor_pos = [position.x as u32, position.y as u32];
             }
-            Event::WindowEvent { event: WindowEvent::MouseInput { state, button, .. }, ..} => {
+            Event::WindowEvent { event: WindowEvent::MouseInput { state, button, .. }, .. } => {
                 if (state == ElementState::Pressed) && (button == MouseButton::Left) {
-                    let buffer_content = frame_system.object_id_cpu.read().unwrap();
-                    let buf_pos = 4 * (cursor_pos[1] * (1600) + cursor_pos[0]) as usize;
-
-                    let entity_id = get_entity_id(
-                        buffer_content[buf_pos],
-                        buffer_content[buf_pos + 1],
-                        buffer_content[buf_pos + 2],
-                        buffer_content[buf_pos + 3],
-                    );
+                    println!("{:?}", entity_id);
+//                    let buffer_content = frame_system.object_id_cpu.read().unwrap();
+//                    let buf_pos = 4 * (cursor_pos[1] * (1600) + cursor_pos[0]) as usize;
+//
+//                    let entity_id = get_entity_id(
+//                        buffer_content[buf_pos],
+//                        buffer_content[buf_pos + 1],
+//                        buffer_content[buf_pos + 2],
+//                        buffer_content[buf_pos + 3],
+//                    );
                 }
             }
 
@@ -145,6 +148,7 @@ fn main() {
                     };
 
                     swapchain = new_swapchain;
+                    images = new_images;
                     cam.set_viewport(dimensions[0], dimensions[1]);
                     recreate_swapchain = false;
                 }
@@ -168,7 +172,7 @@ fn main() {
                 while let Some(pass) = frame.next_pass() {
                     match pass {
                         deferred::Pass::Deferred(mut draw_pass) => {
-                            let cb = terrain_rs.render(terrain_map.clone(), draw_pass.viewport_dimensions(),
+                            let cb = terrain_rs.render(&terrain_map, draw_pass.viewport_dimensions(),
                                                        world, cam.view_matrix(), cam.proj_matrix());
                             draw_pass.execute(cb);
                         }
@@ -191,6 +195,20 @@ fn main() {
 
                 match future {
                     Ok(future) => {
+                        future.wait(None).unwrap();
+                        let buffer_content = frame_system.object_id_cpu.read().unwrap();
+                        let buf_pos = 4 * (cursor_pos[1] * 800 + cursor_pos[0] ) as usize;
+
+//                        println!("{:?} ({:?})", cursor_pos, buf_pos);
+//                        println!("{:?}", buffer_content[buf_pos]);
+                        entity_id = get_entity_id(
+                            buffer_content[buf_pos],
+                            buffer_content[buf_pos + 1],
+                            buffer_content[buf_pos + 2],
+                            buffer_content[buf_pos + 3],
+                        );
+
+                        terrain_map.highlight(entity_id);
                         previous_frame_end = Some(Box::new(future) as Box<_>);
                     }
                     Err(FlushError::OutOfDate) => {

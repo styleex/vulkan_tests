@@ -1,4 +1,4 @@
-use crate::terrain_game::{Map, TerrainBlock};
+use crate::terrain_game::{Map, TerrainBlock, BlockState};
 use crate::cube::{Cube, Vertex};
 use crate::terrain::Terrain;
 use std::sync::Arc;
@@ -18,8 +18,9 @@ use vulkano::pipeline::viewport::Viewport;
 struct InstanceData {
     position_offset: [f32; 2],
     object_id: [f32; 4],
+    highlight: [f32; 4],
 }
-impl_vertex!(InstanceData, position_offset, object_id);
+impl_vertex!(InstanceData, position_offset, object_id, highlight);
 
 pub struct TerrainRenderSystem {
     gfx_queue: Arc<Queue>,
@@ -50,7 +51,7 @@ impl TerrainRenderSystem {
                 .render_pass(subpass)
                 .cull_mode_back()
                 .front_face_counter_clockwise()
-                .polygon_mode_line()
+//                .polygon_mode_line()
                 .depth_stencil_simple_depth()
                 .build(gfx_queue.device().clone())
                 .unwrap())
@@ -68,8 +69,8 @@ impl TerrainRenderSystem {
         }
     }
 
-    pub fn render(&mut self, map: Arc<Map>, viewport_dimensions: [u32; 2], world: Matrix4<f32>, view: Matrix4<f32>, proj: Matrix4<f32>) -> AutoCommandBuffer {
-        if self.instance_data.is_none() {
+    pub fn render(&mut self, map: &Map, viewport_dimensions: [u32; 2], world: Matrix4<f32>, view: Matrix4<f32>, proj: Matrix4<f32>) -> AutoCommandBuffer {
+        if self.instance_data.is_none() || map.changed {
             self.instance_data = Some(self.rebuild_instance_data(map.blocks.clone()));
         }
 
@@ -119,9 +120,18 @@ impl TerrainRenderSystem {
                 ((id >> 16) & 0xFF) as f32 / 255.0,
                 1.0];
 
+            let mut hightlight = [1.0, 1.0, 1.0, 1.0];
+
+            if block.state == BlockState::Highlighted {
+                hightlight[0] = 0.5;
+            }
+
+//            println!("{:?}", x);
+
             instance_data.push(InstanceData {
                 position_offset: [block.x as f32, block.y as f32],
                 object_id: x,
+                highlight: hightlight,
             });
         }
 
@@ -148,6 +158,7 @@ mod vs {
 
             layout(location = 3) in vec2 position_offset;
             layout(location = 4) in vec4 object_id;
+            layout(location = 5) in vec4 highlight;
 
             layout(set = 0, binding = 0) uniform Data {
                 mat4 world;
@@ -159,6 +170,8 @@ mod vs {
             layout(location=2) out vec3 rpos;
             layout(location=3) out vec3 out_color;
             layout(location=4) out vec4 out_object_id;
+            layout(location=5) out vec4 out_hightlight;
+
             void main() {
                 mat4 worldview = uniforms.view;// * uniforms.world;
                 vec3 s_pos = position;
@@ -170,6 +183,7 @@ mod vs {
                 rnormal = normal;
                 out_color = color;
                 out_object_id = object_id;
+                out_hightlight = highlight;
             }
         "
     }
@@ -189,12 +203,13 @@ mod fs {
             layout(location = 2) in vec3 in_world;
             layout(location = 3) in vec3 in_color;
             layout(location = 4) in vec4 in_object_id;
+            layout(location=5) in vec4 in_hightlight;
 
             void main() {
                 vec3 light_pos = normalize(vec3(-0.0, 2.0, 1.0));
                 float light_percent = max(-dot(light_pos, in_normal), 0.0);
 
-                f_color = vec4(in_color, 1.0); vec4(1.0, 1.0, 0.0, 1.0);
+                f_color = vec4(in_color, 1.0) * in_hightlight.x + vec4(0.0, 0.0, 1.0, 1.0) * (1 - in_hightlight.x); //vec4(1.0, 1.0, 0.0, 1.0);
                 f_object_id = in_object_id;
             }
         "

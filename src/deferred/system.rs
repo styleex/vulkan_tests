@@ -217,7 +217,7 @@ impl FrameSystem {
             ambient_lighting_system,
             directional_lighting_system,
             point_lighting_system,
-            object_id_cpu
+            object_id_cpu,
         }
     }
 
@@ -283,11 +283,11 @@ impl FrameSystem {
                                                                 obj_id_usage).unwrap();
 
             self.object_id_cpu = CpuAccessibleBuffer::from_iter(
-            self.gfx_queue.device().clone(),
-            BufferUsage::all(),
-            trues, (0..img_dims[0] * img_dims[1] * 4).map(|_| 0u8),
-        )
-            .expect("Failed to create buffer");
+                self.gfx_queue.device().clone(),
+                BufferUsage::all(),
+                true, (0..img_dims[0] * img_dims[1] * 4).map(|_| 0u8),
+            )
+                .expect("Failed to create buffer");
         }
 
         // Build the framebuffer. The image must be attached in the same order as they were defined
@@ -407,6 +407,7 @@ impl<'a> Frame<'a> {
                 let after_main_cb = self.before_main_cb_future.take().unwrap()
                     .then_execute(self.system.gfx_queue.clone(), command_buffer)
                     .unwrap();
+
                 // We obtain `after_main_cb`, which we give to the user.
                 Some(Pass::Finished(Box::new(after_main_cb)))
             }
