@@ -1,9 +1,9 @@
+use std::time::Instant;
+
 #[derive(Clone, PartialEq)]
 pub enum BlockState {
-    Normal,
-    // Стена
-    Cleared,
-    // Есть проход
+    Normal, // Стена
+    Cleared, // Есть проход
     Highlighted, // Блок подсвечен мышкой
 }
 
@@ -12,6 +12,13 @@ pub struct TerrainBlock {
     pub id: u32,
     pub x: u32,
     pub y: u32,
+
+    pub selected: bool,
+    pub selected_time: Instant,
+
+    pub highlighted: bool,
+    pub hightligh_start: Instant,
+
     pub state: BlockState,
 }
 
@@ -32,7 +39,16 @@ impl Map {
                     continue;
                 }
 
-                blocks.push(TerrainBlock { x, y, state: BlockState::Normal, id: y * (w) + x });
+                blocks.push(TerrainBlock {
+                    x,
+                    y,
+                    selected: false,
+                    selected_time: Instant::now(),
+                    highlighted: false,
+                    hightligh_start: Instant::now(),
+                    state: BlockState::Normal,
+                    id: y * (w) + x,
+                });
             }
         }
 
@@ -46,20 +62,39 @@ impl Map {
 
     pub fn highlight(&mut self, id: Option<u32>) {
         let mut changed = false;
+
         for block in self.blocks.iter_mut() {
-            if id == Some(block.id) {
-                if block.state != BlockState::Highlighted {
-                    changed = true;
-                }
-                block.state = BlockState::Highlighted;
-            } else {
-                if block.state != BlockState::Normal {
-                    changed = true;
-                }
-                block.state = BlockState::Normal;
+            let new_highlighted = Some(block.id) == id;
+
+            if block.highlighted != new_highlighted {
+                block.highlighted = new_highlighted;
+                block.hightligh_start = Instant::now();
+                changed = true;
             }
         }
 
         self.changed = changed;
+    }
+
+    pub fn select(&mut self, id: Option<u32>) {
+        for block in self.blocks.iter_mut() {
+            if Some(block.id) == id {
+                block.selected = !block.selected;
+                block.selected_time = Instant::now();
+                break;
+            }
+        }
+
+        self.changed = true;
+    }
+
+    pub fn update(&mut self) {
+        for block in self.blocks.iter_mut() {
+            if block.selected && block.selected_time.elapsed().as_millis() > 500 {
+                block.selected = false;
+                block.highlighted = false;
+                block.state = BlockState::Cleared;
+            }
+        }
     }
 }

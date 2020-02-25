@@ -46,8 +46,6 @@ impl Camera {
     }
 
     pub fn view_matrix(&self) -> Matrix4<f32> {
-//        let dir = rotation.transform_vector(vec3(0.0, 0.0, -1.0));
-
         return Matrix4::<f32>::look_at(self.position, self.position + self.view_dir, self.up_dir);
     }
 

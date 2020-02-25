@@ -3,7 +3,7 @@ use vulkano::command_buffer::{AutoCommandBufferBuilder, DynamicState};
 use vulkano::device::{Device, DeviceExtensions};
 use vulkano::format::Format;
 use vulkano::framebuffer::{Framebuffer, FramebufferAbstract, Subpass, RenderPassAbstract};
-use vulkano::image::{AttachmentImage, ImageUsage, Dimensions, ImmutableImage};
+use vulkano::image::{AttachmentImage, ImageUsage, Dimensions, ImmutableImage, ImageAccess};
 use vulkano::image::SwapchainImage;
 use vulkano::instance::{Instance, PhysicalDevice};
 use vulkano::pipeline::GraphicsPipeline;
@@ -33,21 +33,14 @@ use crate::terrain::{Terrain, Vertex, HeightMap};
 use std::io::Cursor;
 use crate::block_render::BlockRender;
 use crate::terrain_game::Map;
-use crate::terrain_render_system::TerrainRenderSystem;
+use crate::terrain_render_system::{TerrainRenderSystem, RenderPipeline};
+use std::time::Instant;
 
 mod terrain_game;
 mod block_render;
 mod terrain_render_system;
 mod cube;
 mod mouse_picker;
-
-fn get_entity_id(r: u8, g: u8, b: u8, a: u8) -> Option<u32> {
-    if a == 0 {
-        None
-    } else {
-        Some(((r as usize) | (g as usize) << 8 | (b as usize) << 16) as u32)
-    }
-}
 
 fn main() {
     let required_extensions = vulkano_win::required_extensions();
@@ -84,14 +77,19 @@ fn main() {
                        PresentMode::Fifo, FullscreenExclusive::Default, true, ColorSpace::SrgbNonLinear).unwrap()
     };
 
+    let mut picker = mouse_picker::Picker::new(queue.clone());
     let mut frame_system = deferred::FrameSystem::new(queue.clone(), swapchain.format());
-    let mut terrain_map = Map::new(10, 10);
-    let mut terrain_rs = TerrainRenderSystem::new(queue.clone(), frame_system.deferred_subpass());
+
+    let mut terrain_map = Map::new(40, 40);
+    let mut terrain_rs = TerrainRenderSystem::new(queue.clone(),
+                                                  frame_system.deferred_subpass(),
+                                                  picker.subpass());
 
     let world = Matrix4::identity();
     let mut recreate_swapchain = false;
 
     let mut cursor_pos = [0, 0];
+    let mut cursor_pos_changed = false;
     let mut entity_id: Option<u32> = None;
 
     let mut previous_frame_end = Some(Box::new(sync::now(device.clone())) as Box<dyn GpuFuture>);
@@ -119,26 +117,21 @@ fn main() {
                 cam.handle_keyboard(input);
             }
             Event::WindowEvent { event: WindowEvent::CursorMoved { position, .. }, .. } => {
-                cursor_pos = [position.x as u32, position.y as u32];
+                if cursor_pos != [position.x as u32, position.y as u32] {
+                    cursor_pos = [position.x as u32, position.y as u32];
+                    cursor_pos_changed = true;
+                }
             }
             Event::WindowEvent { event: WindowEvent::MouseInput { state, button, .. }, .. } => {
                 if (state == ElementState::Pressed) && (button == MouseButton::Left) {
                     println!("{:?}", entity_id);
-//                    let buffer_content = frame_system.object_id_cpu.read().unwrap();
-//                    let buf_pos = 4 * (cursor_pos[1] * (1600) + cursor_pos[0]) as usize;
-//
-//                    let entity_id = get_entity_id(
-//                        buffer_content[buf_pos],
-//                        buffer_content[buf_pos + 1],
-//                        buffer_content[buf_pos + 2],
-//                        buffer_content[buf_pos + 3],
-//                    );
+                    terrain_map.select(entity_id);
                 }
             }
 
             Event::RedrawEventsCleared => {
                 previous_frame_end.as_mut().unwrap().cleanup_finished();
-
+                terrain_map.update();
                 if recreate_swapchain {
                     let dimensions: [u32; 2] = surface.window().inner_size().into();
                     let (new_swapchain, new_images) = match swapchain.recreate_with_dimensions(dimensions) {
@@ -166,13 +159,26 @@ fn main() {
                     recreate_swapchain = true;
                 }
 
+                if cursor_pos_changed {
+                    let dims = ImageAccess::dimensions(&images[image_num]).width_height();
+                    let cb = terrain_rs.render(RenderPipeline::ObjectIdMap,
+                                               &terrain_map, dims,
+                                               world, cam.view_matrix(), cam.proj_matrix());
+
+                    entity_id = picker.draw(dims, vec!(cb), cursor_pos[0], cursor_pos[1]);
+                    terrain_map.highlight(entity_id);
+
+                    cursor_pos_changed = false;
+                }
+
                 let future = previous_frame_end.take().unwrap().join(acquire_future);
                 let mut frame = frame_system.frame(future, images[image_num].clone(), Matrix4::identity());
                 let mut after_future = None;
                 while let Some(pass) = frame.next_pass() {
                     match pass {
                         deferred::Pass::Deferred(mut draw_pass) => {
-                            let cb = terrain_rs.render(&terrain_map, draw_pass.viewport_dimensions(),
+                            let cb = terrain_rs.render(RenderPipeline::Diffuse,
+                                                       &terrain_map, draw_pass.viewport_dimensions(),
                                                        world, cam.view_matrix(), cam.proj_matrix());
                             draw_pass.execute(cb);
                         }
@@ -196,19 +202,6 @@ fn main() {
                 match future {
                     Ok(future) => {
                         future.wait(None).unwrap();
-                        let buffer_content = frame_system.object_id_cpu.read().unwrap();
-                        let buf_pos = 4 * (cursor_pos[1] * 800 + cursor_pos[0] ) as usize;
-
-//                        println!("{:?} ({:?})", cursor_pos, buf_pos);
-//                        println!("{:?}", buffer_content[buf_pos]);
-                        entity_id = get_entity_id(
-                            buffer_content[buf_pos],
-                            buffer_content[buf_pos + 1],
-                            buffer_content[buf_pos + 2],
-                            buffer_content[buf_pos + 3],
-                        );
-
-                        terrain_map.highlight(entity_id);
                         previous_frame_end = Some(Box::new(future) as Box<_>);
                     }
                     Err(FlushError::OutOfDate) => {
