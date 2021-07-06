@@ -194,6 +194,11 @@ impl Picker {
 
         command_buffer_builder.execute_commands_from_vec(cmds).unwrap();
 
+        let dims = self.object_id_buffer.image().dimensions().width_height();
+        if !(0..dims[0]).contains(&x) || !(0..dims[1]).contains(&y) {
+            return None
+        }
+
         command_buffer_builder
             .end_render_pass().unwrap()
             .copy_image_to_buffer_dimensions(
@@ -214,10 +219,6 @@ impl Picker {
         let buffer_content = self.object_id_cpu.read().unwrap();
         get_entity_id(buffer_content[0], buffer_content[1], buffer_content[2], buffer_content[3])
     }
-
-//    pub fn pick(&self, x: u32, y: u32) -> Option<u32> {
-////        let dims = ImageAccess::dimensions(&self.object_id_buffer).width_height();
-//    }
 }
 
 

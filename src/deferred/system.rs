@@ -173,7 +173,7 @@ impl FrameSystem {
             AttachmentImage::with_usage(
                 gfx_queue.device().clone(),
                 [1, 1],
-                Format::D16Unorm,
+                Format::D32Sfloat,
                 atch_usage,
             )
                 .unwrap(),
@@ -265,7 +265,7 @@ impl FrameSystem {
                 AttachmentImage::with_usage(
                     self.gfx_queue.device().clone(),
                     img_dims,
-                    Format::D16Unorm,
+                    Format::D32Sfloat,
                     atch_usage,
                 )
                     .unwrap(),
