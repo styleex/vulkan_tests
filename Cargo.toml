@@ -6,11 +6,11 @@ edition = "2018"
 publish = false
 
 [dependencies]
-vulkano = "0.17"
-vulkano-shaders = "0.17"
-vulkano-win = "0.17"
-cgmath = "0.17"
-time = "0.1.38"
-winit = "0.21"
-png = "0.15.3"
+vulkano = "0.24"
+vulkano-shaders = "0.24"
+vulkano-win = "0.24"
+cgmath = "0.18"
+time = "0.2"
+winit = "0.25"
+png = "0.16"
 genmesh = "0.6.2"

@@ -1,25 +1,28 @@
-use vulkano::buffer::{ImmutableBuffer, BufferUsage, CpuBufferPool};
-use std::sync::Arc;
-use vulkano::sync::GpuFuture;
 use std::io::Cursor;
-use cgmath::{Vector3, InnerSpace, Matrix4};
-use vulkano::pipeline::{GraphicsPipelineAbstract, GraphicsPipeline};
-use vulkano::device::Queue;
-use vulkano::framebuffer::{Subpass, RenderPassAbstract};
+use std::sync::Arc;
+
+use cgmath::{InnerSpace, Matrix4, Vector3};
+use vulkano::buffer::{BufferUsage, CpuBufferPool, ImmutableBuffer};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, DynamicState, SecondaryAutoCommandBuffer};
 use vulkano::descriptor::descriptor_set::PersistentDescriptorSet;
-use vulkano::command_buffer::{AutoCommandBufferBuilder, AutoCommandBuffer, DynamicState};
-use vulkano::pipeline::viewport::Viewport;
-use vulkano::image::{ImmutableImage, Dimensions, ImageViewAccess};
-use vulkano::sampler::{Sampler, Filter, SamplerAddressMode, MipmapMode};
+use vulkano::device::Queue;
 use vulkano::format::Format;
+use vulkano::image::{ImageDimensions, ImmutableImage, MipmapsCount};
+use vulkano::pipeline::{GraphicsPipeline, GraphicsPipelineAbstract};
+use vulkano::pipeline::viewport::Viewport;
+use vulkano::render_pass::Subpass;
+use vulkano::sampler::{Filter, MipmapMode, Sampler, SamplerAddressMode};
+use vulkano::sync::GpuFuture;
+use vulkano::image::view::ImageView;
 
-
+#[allow(dead_code)]
 pub struct HeightMap {
     pub w: u32,
     pub h: u32,
     height_fn: Box<dyn Fn(u32, u32) -> f32>,
 }
 
+#[allow(dead_code)]
 impl HeightMap {
     pub fn from_png() -> HeightMap {
         let data = include_bytes!("static/heightmap.png").to_vec();
@@ -77,22 +80,22 @@ pub struct Vertex {
 }
 vulkano::impl_vertex!(Vertex, position, normal, texcoord);
 
+#[allow(dead_code)]
 pub struct Terrain {
     gfx_queue: Arc<Queue>,
     pipeline: Arc<dyn GraphicsPipelineAbstract + Send + Sync>,
     uniform_buffer: CpuBufferPool<vs::ty::Data>,
 
-    texture: Arc<dyn ImageViewAccess + Send + Sync>,
+    texture: Arc<ImageView<Arc<ImmutableImage>>>,
     sampler: Arc<Sampler>,
     pub vertices: Arc<ImmutableBuffer<[Vertex]>>,
     pub indices: Arc<ImmutableBuffer<[u32]>>,
 
 }
 
+#[allow(dead_code)]
 impl Terrain {
-    pub fn new<R>(gfx_queue: Arc<Queue>, height_map: HeightMap, subpass: Subpass<R>) -> Terrain
-        where R: RenderPassAbstract + Send + Sync + 'static
-    {
+    pub fn new(gfx_queue: Arc<Queue>, height_map: HeightMap, subpass: Subpass) -> Terrain {
         let w = height_map.w;
         let h = height_map.h;
 
@@ -109,10 +112,10 @@ impl Terrain {
                 let pos = get_pos(x, y);
 
                 // Bottom left, Bottom right, Upper left
-                let l = get_pos(x-1, y) - pos;
-                let t = get_pos(x, y+1) - pos;
-                let r = get_pos(x+1, y) - pos;
-                let b = get_pos(x, y-1) - pos;
+                let l = get_pos(x - 1, y) - pos;
+                let t = get_pos(x, y + 1) - pos;
+                let r = get_pos(x + 1, y) - pos;
+                let b = get_pos(x, y - 1) - pos;
 
                 let lb = l.cross(b).normalize();
                 let br = b.cross(r).normalize();
@@ -178,18 +181,21 @@ impl Terrain {
             let png_bytes = include_bytes!("static/ground.png").to_vec();
             let cursor = Cursor::new(png_bytes);
             let decoder = png::Decoder::new(cursor);
-            let (info, mut  reader) = decoder.read_info().unwrap();
-            let dimensions = Dimensions::Dim2d { width: info.width, height: info.height };
+            let (info, mut reader) = decoder.read_info().unwrap();
+            let dimensions = ImageDimensions::Dim2d { width: info.width, height: info.height, array_layers: 0 }; // FIXME: check need array=0 or array=1?
             let mut image_data = Vec::new();
             image_data.resize((info.width * info.height * 4) as usize, 0);
             reader.next_frame(&mut image_data).unwrap();
 
-            ImmutableImage::from_iter(
+            let (image, future) = ImmutableImage::from_iter(
                 image_data.iter().cloned(),
                 dimensions,
+                MipmapsCount::One,
                 Format::R8G8B8A8Srgb,
                 gfx_queue.clone(),
-            ).unwrap()
+            ).unwrap();
+
+            (ImageView::new(image), future)
         };
 
         tex_future.then_signal_fence_and_flush().unwrap().wait(None).unwrap();
@@ -202,13 +208,13 @@ impl Terrain {
             pipeline,
             uniform_buffer,
             sampler,
-            texture,
+            texture: texture.unwrap(),
             vertices: bb,
             indices: ib,
         }
     }
 
-    pub fn draw(&self, viewport_dimensions: [u32; 2], world: Matrix4<f32>, view: Matrix4<f32>, proj: Matrix4<f32>) -> AutoCommandBuffer {
+    pub fn draw(&self, viewport_dimensions: [u32; 2], world: Matrix4<f32>, view: Matrix4<f32>, proj: Matrix4<f32>) -> SecondaryAutoCommandBuffer {
         let uniform_buffer_subbuffer = {
             let uniform_data = vs::ty::Data {
                 world: world.into(),
@@ -220,31 +226,42 @@ impl Terrain {
         };
 
 
-        let layout = self.pipeline.descriptor_set_layout(0).unwrap();
-        let set = Arc::new(PersistentDescriptorSet::start(layout.clone())
-            .add_buffer(uniform_buffer_subbuffer).unwrap()
-            .add_sampled_image(self.texture.clone(), self.sampler.clone()).unwrap()
-            .build().unwrap()
+        let layout = self.pipeline.layout().descriptor_set_layout(0).unwrap();
+
+        let set = Arc::new(
+            PersistentDescriptorSet::start(layout.clone())
+                .add_buffer(uniform_buffer_subbuffer)
+                .unwrap()
+                .add_sampled_image(self.texture.clone(), self.sampler.clone())
+                .unwrap()
+                .build()
+                .unwrap()
         );
 
-        AutoCommandBufferBuilder::secondary_graphics(self.gfx_queue.device().clone(),
+        let mut builder = AutoCommandBufferBuilder::secondary_graphics(self.gfx_queue.device().clone(),
                                                      self.gfx_queue.family(),
-                                                     self.pipeline.clone().subpass())
-            .unwrap()
-            .draw_indexed(self.pipeline.clone(),
-                          &DynamicState {
-                              viewports: Some(vec![Viewport {
-                                  origin: [0.0, 0.0],
-                                  dimensions: [viewport_dimensions[0] as f32,
-                                      viewport_dimensions[1] as f32],
-                                  depth_range: 0.0..1.0,
-                              }]),
-                              ..DynamicState::none()
-                          },
-                          vec![self.vertices.clone()], self.indices.clone(), set.clone(), ())
-            .unwrap()
-            .build()
-            .unwrap()
+                                                     CommandBufferUsage::MultipleSubmit,
+                                                     self.pipeline.subpass().clone()).unwrap();
+        builder.draw_indexed(
+                self.pipeline.clone(),
+                &DynamicState {
+                    viewports: Some(vec![Viewport {
+                        origin: [0.0, 0.0],
+                        dimensions: [viewport_dimensions[0] as f32,
+                            viewport_dimensions[1] as f32],
+                        depth_range: 0.0..1.0,
+                    }]),
+                    ..DynamicState::none()
+                },
+                vec![self.vertices.clone()],
+                self.indices.clone(),
+                set.clone(),
+                (),
+                vec![],
+            )
+            .unwrap();
+
+        builder.build().unwrap()
     }
 }
 

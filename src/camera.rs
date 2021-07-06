@@ -46,7 +46,7 @@ impl Camera {
     }
 
     pub fn view_matrix(&self) -> Matrix4<f32> {
-        return Matrix4::<f32>::look_at(self.position, self.position + self.view_dir, self.up_dir);
+        return Matrix4::<f32>::look_at_rh(self.position, self.position + self.view_dir, self.up_dir);
     }
 
     pub fn proj_matrix(&self) -> Matrix4<f32> {

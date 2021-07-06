@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 #[derive(Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum BlockState {
     Normal, // Стена
     Cleared, // Есть проход

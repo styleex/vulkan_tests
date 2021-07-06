@@ -1,14 +1,7 @@
-use vulkano::buffer::{ImmutableBuffer, BufferUsage, CpuBufferPool};
+use vulkano::buffer::{ImmutableBuffer, BufferUsage};
 use std::sync::Arc;
 use vulkano::sync::GpuFuture;
-use std::io::Cursor;
-use cgmath::{Vector3, InnerSpace, Matrix4};
-use vulkano::pipeline::{GraphicsPipelineAbstract, GraphicsPipeline};
 use vulkano::device::Queue;
-use vulkano::descriptor::descriptor_set::PersistentDescriptorSet;
-use vulkano::command_buffer::{AutoCommandBufferBuilder, AutoCommandBuffer, DynamicState};
-use vulkano::pipeline::viewport::Viewport;
-use vulkano::format::Format;
 
 #[derive(Default, Debug, Clone)]
 pub struct Vertex {

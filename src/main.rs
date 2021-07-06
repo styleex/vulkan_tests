@@ -1,40 +1,25 @@
-use vulkano::buffer::{BufferUsage, CpuBufferPool};
-use vulkano::command_buffer::{AutoCommandBufferBuilder, DynamicState};
+use cgmath::{Matrix4, SquareMatrix};
+use vulkano::{swapchain, Version};
 use vulkano::device::{Device, DeviceExtensions};
-use vulkano::format::Format;
-use vulkano::framebuffer::{Framebuffer, FramebufferAbstract, Subpass, RenderPassAbstract};
-use vulkano::image::{AttachmentImage, ImageUsage, Dimensions, ImmutableImage, ImageAccess};
-use vulkano::image::SwapchainImage;
+use vulkano::image::{ImageAccess, ImageUsage};
+use vulkano::image::view::ImageView;
 use vulkano::instance::{Instance, PhysicalDevice};
-use vulkano::pipeline::GraphicsPipeline;
-use vulkano::descriptor::pipeline_layout::PipelineLayoutAbstract;
-use vulkano::pipeline::viewport::Viewport;
-use vulkano::swapchain::{AcquireError, PresentMode, SurfaceTransform, Swapchain, SwapchainCreationError, ColorSpace, FullscreenExclusive};
-use vulkano::swapchain;
-use vulkano::sync::{GpuFuture, FlushError};
+use vulkano::swapchain::{AcquireError, Swapchain, SwapchainCreationError};
+use vulkano::sync::{FlushError, GpuFuture};
 use vulkano::sync;
-use vulkano::descriptor::descriptor_set::PersistentDescriptorSet;
-
 use vulkano_win::VkSurfaceBuild;
-use winit::window::{WindowBuilder, Window};
-use winit::event_loop::{EventLoop, ControlFlow};
-use winit::event::{Event, WindowEvent, MouseButton};
-
-use std::sync::Arc;
-use crate::camera::Camera;
+use winit::event::{Event, MouseButton, WindowEvent};
 use winit::event::{ElementState, VirtualKeyCode};
+use winit::event_loop::{ControlFlow, EventLoop};
+use winit::window::WindowBuilder;
+
+use crate::camera::Camera;
+use crate::terrain_game::Map;
+use crate::terrain_render_system::{RenderPipeline, TerrainRenderSystem};
 
 mod terrain;
 mod camera;
 mod deferred;
-
-use cgmath::{Matrix4, SquareMatrix};
-use crate::terrain::{Terrain, Vertex, HeightMap};
-use std::io::Cursor;
-use crate::block_render::BlockRender;
-use crate::terrain_game::Map;
-use crate::terrain_render_system::{TerrainRenderSystem, RenderPipeline};
-use std::time::Instant;
 
 mod terrain_game;
 mod block_render;
@@ -44,9 +29,8 @@ mod mouse_picker;
 
 fn main() {
     let required_extensions = vulkano_win::required_extensions();
-    let instance = Instance::new(None, &required_extensions, None).unwrap();
+    let instance = Instance::new(None, Version::V1_1, &required_extensions, None).unwrap();
     let physical = PhysicalDevice::enumerate(&instance).next().unwrap();
-    println!("Using device: {} (type: {:?})", physical.name(), physical.ty());
 
     let event_loop = EventLoop::new();
     let surface = WindowBuilder::new().build_vk_surface(&event_loop, instance.clone()).unwrap();
@@ -64,17 +48,27 @@ fn main() {
     let mut cam = Camera::new();
     let (mut swapchain, mut images) = {
         let caps = surface.capabilities(physical).unwrap();
-        let usage = caps.supported_usage_flags;
-
-        let alpha = caps.supported_composite_alpha.iter().next().unwrap();
+        let composite_alpha = caps.supported_composite_alpha.iter().next().unwrap();
         let format = caps.supported_formats[0].0;
-
         let dimensions: [u32; 2] = surface.window().inner_size().into();
 
         cam.set_viewport(dimensions[0], dimensions[1]);
-        Swapchain::new(device.clone(), surface.clone(), caps.min_image_count, format,
-                       dimensions, 1, usage, &queue, SurfaceTransform::Identity, alpha,
-                       PresentMode::Fifo, FullscreenExclusive::Default, true, ColorSpace::SrgbNonLinear).unwrap()
+
+        let (swapchain, images) = Swapchain::start(device.clone(), surface.clone())
+            .num_images(caps.min_image_count)
+            .format(format)
+            .dimensions(dimensions)
+            .usage(ImageUsage::color_attachment())
+            .sharing_mode(&queue)
+            .composite_alpha(composite_alpha)
+            .build()
+            .unwrap();
+
+        let images = images
+            .into_iter()
+            .map(|image| ImageView::new(image.clone()).unwrap())
+            .collect::<Vec<_>>();
+        (swapchain, images)
     };
 
     let mut picker = mouse_picker::Picker::new(queue.clone());
@@ -131,18 +125,26 @@ fn main() {
 
             Event::RedrawEventsCleared => {
                 previous_frame_end.as_mut().unwrap().cleanup_finished();
+
                 terrain_map.update();
                 if recreate_swapchain {
                     let dimensions: [u32; 2] = surface.window().inner_size().into();
-                    let (new_swapchain, new_images) = match swapchain.recreate_with_dimensions(dimensions) {
-                        Ok(r) => r,
-                        Err(SwapchainCreationError::UnsupportedDimensions) => return,
-                        Err(e) => panic!("Failed to recreate swapchain: {:?}", e)
-                    };
+                    let (new_swapchain, new_images) =
+                        match swapchain.recreate().dimensions(dimensions).build() {
+                            Ok(r) => r,
+                            Err(SwapchainCreationError::UnsupportedDimensions) => return,
+                            Err(e) => panic!("Failed to recreate swapchain: {:?}", e),
+                        };
+
+                    let new_images = new_images
+                        .into_iter()
+                        .map(|image| ImageView::new(image.clone()).unwrap())
+                        .collect::<Vec<_>>();
 
                     swapchain = new_swapchain;
                     images = new_images;
                     cam.set_viewport(dimensions[0], dimensions[1]);
+
                     recreate_swapchain = false;
                 }
 
@@ -160,7 +162,9 @@ fn main() {
                 }
 
                 if cursor_pos_changed {
-                    let dims = ImageAccess::dimensions(&images[image_num]).width_height();
+
+                    let dims = images[image_num].image().dimensions().width_height();
+
                     let cb = terrain_rs.render(RenderPipeline::ObjectIdMap,
                                                &terrain_map, dims,
                                                world, cam.view_matrix(), cam.proj_matrix());

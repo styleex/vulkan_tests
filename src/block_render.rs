@@ -1,18 +1,14 @@
-use vulkano::buffer::{ImmutableBuffer, BufferUsage, CpuBufferPool};
 use std::sync::Arc;
-use vulkano::sync::GpuFuture;
-use std::io::Cursor;
-use cgmath::{Vector3, InnerSpace, Matrix4};
-use vulkano::pipeline::{GraphicsPipelineAbstract, GraphicsPipeline};
-use vulkano::device::Queue;
-use vulkano::framebuffer::{Subpass, RenderPassAbstract};
-use vulkano::descriptor::descriptor_set::PersistentDescriptorSet;
-use vulkano::command_buffer::{AutoCommandBufferBuilder, AutoCommandBuffer, DynamicState};
-use vulkano::pipeline::viewport::Viewport;
-use vulkano::image::{ImmutableImage, Dimensions, ImageViewAccess};
-use vulkano::sampler::{Sampler, Filter, SamplerAddressMode, MipmapMode};
-use vulkano::format::Format;
 
+use cgmath::Matrix4;
+use vulkano::buffer::{BufferUsage, CpuBufferPool, ImmutableBuffer};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, DynamicState, SecondaryAutoCommandBuffer};
+use vulkano::descriptor::descriptor_set::PersistentDescriptorSet;
+use vulkano::device::Queue;
+use vulkano::pipeline::{GraphicsPipeline, GraphicsPipelineAbstract};
+use vulkano::pipeline::viewport::Viewport;
+use vulkano::render_pass::Subpass;
+use vulkano::sync::GpuFuture;
 
 #[derive(Default, Debug, Clone)]
 pub struct Vertex {
@@ -22,6 +18,7 @@ pub struct Vertex {
 }
 vulkano::impl_vertex!(Vertex, position, normal, color);
 
+#[allow(dead_code)]
 pub struct BlockRender {
     gfx_queue: Arc<Queue>,
     pipeline: Arc<dyn GraphicsPipelineAbstract + Send + Sync>,
@@ -31,9 +28,9 @@ pub struct BlockRender {
     pub indices: Arc<ImmutableBuffer<[u32]>>,
 }
 
+#[allow(dead_code)]
 impl BlockRender {
-    pub fn new<R>(gfx_queue: Arc<Queue>, subpass: Subpass<R>) -> BlockRender
-        where R: RenderPassAbstract + Send + Sync + 'static
+    pub fn new(gfx_queue: Arc<Queue>, subpass: Subpass) -> BlockRender
     {
         let h = 3.0_f32;
 
@@ -140,7 +137,7 @@ impl BlockRender {
         }
     }
 
-    pub fn draw(&self, viewport_dimensions: [u32; 2], world: Matrix4<f32>, view: Matrix4<f32>, proj: Matrix4<f32>) -> AutoCommandBuffer {
+    pub fn draw(&self, viewport_dimensions: [u32; 2], world: Matrix4<f32>, view: Matrix4<f32>, proj: Matrix4<f32>) -> SecondaryAutoCommandBuffer {
         let uniform_buffer_subbuffer = {
             let uniform_data = vs::ty::Data {
                 world: world.into(),
@@ -152,30 +149,39 @@ impl BlockRender {
         };
 
 
-        let layout = self.pipeline.descriptor_set_layout(0).unwrap();
+        let layout = self.pipeline.layout().descriptor_set_layout(0).unwrap();
         let set = Arc::new(PersistentDescriptorSet::start(layout.clone())
             .add_buffer(uniform_buffer_subbuffer).unwrap()
             .build().unwrap()
         );
 
-        AutoCommandBufferBuilder::secondary_graphics(self.gfx_queue.device().clone(),
-                                                     self.gfx_queue.family(),
-                                                     self.pipeline.clone().subpass())
-            .unwrap()
-            .draw_indexed(self.pipeline.clone(),
-                          &DynamicState {
-                              viewports: Some(vec![Viewport {
-                                  origin: [0.0, 0.0],
-                                  dimensions: [viewport_dimensions[0] as f32,
-                                      viewport_dimensions[1] as f32],
-                                  depth_range: 0.0..1.0,
-                              }]),
-                              ..DynamicState::none()
-                          },
-                          vec![self.vertices.clone()], self.indices.clone(), set.clone(), ())
-            .unwrap()
-            .build()
-            .unwrap()
+        let mut builder = AutoCommandBufferBuilder::secondary_graphics(
+            self.gfx_queue.device().clone(),
+            self.gfx_queue.family(),
+            CommandBufferUsage::MultipleSubmit,
+            self.pipeline.subpass().clone(),
+        )
+            .unwrap();
+
+        builder.draw_indexed(self.pipeline.clone(),
+                             &DynamicState {
+                                 viewports: Some(vec![Viewport {
+                                     origin: [0.0, 0.0],
+                                     dimensions: [viewport_dimensions[0] as f32,
+                                         viewport_dimensions[1] as f32],
+                                     depth_range: 0.0..1.0,
+                                 }]),
+                                 ..DynamicState::none()
+                             },
+                             vec![self.vertices.clone()],
+                             self.indices.clone(),
+                             set.clone(),
+                             (),
+                             vec![],
+        )
+            .unwrap();
+
+        builder.build().unwrap()
     }
 }
 

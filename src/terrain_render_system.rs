@@ -1,20 +1,20 @@
-use crate::terrain_game::{Map, TerrainBlock, BlockState};
-use crate::cube::{Cube, Vertex};
-use crate::terrain::Terrain;
 use std::sync::Arc;
-use vulkano::buffer::{ImmutableBuffer, BufferUsage, CpuBufferPool, CpuAccessibleBuffer, BufferAccess};
+
+use cgmath::{Angle, Deg, Matrix4, Rad};
+use vulkano::buffer::{BufferUsage, CpuBufferPool};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, DynamicState, SecondaryAutoCommandBuffer};
+use vulkano::descriptor::descriptor_set::PersistentDescriptorSet;
 use vulkano::device::Queue;
 use vulkano::impl_vertex;
-use vulkano::sync::GpuFuture;
-use vulkano::framebuffer::{Subpass, RenderPassAbstract};
-use vulkano::pipeline::{GraphicsPipelineAbstract, GraphicsPipeline};
+use vulkano::pipeline::{GraphicsPipeline, GraphicsPipelineAbstract};
 use vulkano::pipeline::vertex::OneVertexOneInstanceDefinition;
-use cgmath::{Matrix4, Rad, Deg, Angle};
-use vulkano::descriptor::descriptor_set::PersistentDescriptorSet;
-use vulkano::command_buffer::{AutoCommandBufferBuilder, DynamicState, AutoCommandBuffer};
 use vulkano::pipeline::viewport::Viewport;
-use std::time::Instant;
+use vulkano::render_pass::Subpass;
 
+use crate::cube::{Cube, Vertex};
+use crate::terrain_game::{BlockState, Map, TerrainBlock};
+
+#[allow(dead_code)]
 pub enum RenderPipeline {
     ObjectIdMap,
     Diffuse,
@@ -41,9 +41,7 @@ pub struct TerrainRenderSystem {
 }
 
 impl TerrainRenderSystem {
-    pub fn new<R>(gfx_queue: Arc<Queue>, main_subpass: Subpass<R>, object_map_subpass: Subpass<R>) -> TerrainRenderSystem
-        where R: RenderPassAbstract + Send + Sync + 'static
-    {
+    pub fn new(gfx_queue: Arc<Queue>, main_subpass: Subpass, object_map_subpass: Subpass) -> TerrainRenderSystem {
         let main_pipeline = {
             let vs = vs::Shader::load(gfx_queue.device().clone())
                 .expect("failed to create shader module");
@@ -99,7 +97,7 @@ impl TerrainRenderSystem {
     }
 
     pub fn render(&mut self, pipeline: RenderPipeline, map: &Map, viewport_dimensions: [u32; 2],
-                  world: Matrix4<f32>, view: Matrix4<f32>, proj: Matrix4<f32>) -> AutoCommandBuffer {
+                  world: Matrix4<f32>, view: Matrix4<f32>, proj: Matrix4<f32>) -> SecondaryAutoCommandBuffer {
         let uniform_buffer_subbuffer = {
             let uniform_data = vs::ty::Data {
                 world: world.into(),
@@ -121,30 +119,39 @@ impl TerrainRenderSystem {
             RenderPipeline::Shadows => unreachable!(),
         };
 
-        let layout = pipeline.descriptor_set_layout(0).unwrap();
+        let layout = pipeline.layout().descriptor_set_layout(0).unwrap();
         let set = Arc::new(PersistentDescriptorSet::start(layout.clone())
             .add_buffer(uniform_buffer_subbuffer).unwrap()
             .build().unwrap()
         );
 
-        AutoCommandBufferBuilder::secondary_graphics(self.gfx_queue.device().clone(),
-                                                     self.gfx_queue.family(),
-                                                     pipeline.clone().subpass())
-            .unwrap()
-            .draw_indexed(pipeline.clone(),
-                          &DynamicState {
-                              viewports: Some(vec![Viewport {
-                                  origin: [0.0, 0.0],
-                                  dimensions: [viewport_dimensions[0] as f32,
-                                      viewport_dimensions[1] as f32],
-                                  depth_range: 0.0..1.0,
-                              }]),
-                              ..DynamicState::none()
-                          },
-                          vec!(self.cube.vertices.clone(), Arc::new(instance_data_subbuffer)), self.cube.indices.clone(), set.clone(), ())
-            .unwrap()
-            .build()
-            .unwrap()
+        let mut builder = AutoCommandBufferBuilder::secondary_graphics(
+            self.gfx_queue.device().clone(),
+            self.gfx_queue.family(),
+            CommandBufferUsage::MultipleSubmit,
+            pipeline.subpass().clone())
+            .unwrap();
+
+        builder.draw_indexed(pipeline.clone(),
+                             &DynamicState {
+                                 viewports: Some(vec![Viewport {
+                                     origin: [0.0, 0.0],
+                                     dimensions: [viewport_dimensions[0] as f32,
+                                         viewport_dimensions[1] as f32],
+                                     depth_range: 0.0..1.0,
+                                 }]),
+                                 ..DynamicState::none()
+                             },
+                             vec!(self.cube.vertices.clone(),
+                                  Arc::new(instance_data_subbuffer)),
+                             self.cube.indices.clone(),
+                             set.clone(),
+                             (),
+                             vec![],
+        )
+            .unwrap();
+
+        builder.build().unwrap()
     }
 
     fn rebuild_instance_data(&self, blocks: Vec<TerrainBlock>) -> Vec<InstanceData> {
@@ -152,7 +159,7 @@ impl TerrainRenderSystem {
 
         for block in blocks {
             if block.state == BlockState::Cleared {
-                continue
+                continue;
             }
             let id = block.id;
             let x = [((id & 0xFF) as f32) / 255.0,
@@ -163,11 +170,11 @@ impl TerrainRenderSystem {
             let mut hightlight = [1.0, 1.0, 1.0, 1.0];
 
             if block.highlighted && !block.selected {
-                hightlight[0] =  0.5 + (Rad::from(Deg(block.hightligh_start.elapsed().as_millis() as f32 / 8.0)).sin() / 4.0).abs();
+                hightlight[0] = 0.5 + (Rad::from(Deg(block.hightligh_start.elapsed().as_millis() as f32 / 8.0)).sin() / 4.0).abs();
             }
 
             if block.selected {
-                hightlight[0] =  0.5;
+                hightlight[0] = 0.5;
             }
 
             instance_data.push(InstanceData {

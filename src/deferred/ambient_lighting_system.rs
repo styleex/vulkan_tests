@@ -7,24 +7,23 @@
 // notice may not be copied, modified, or distributed except
 // according to those terms.
 
+use std::sync::Arc;
+
 use vulkano::buffer::BufferUsage;
 use vulkano::buffer::CpuAccessibleBuffer;
-use vulkano::command_buffer::AutoCommandBuffer;
-use vulkano::command_buffer::AutoCommandBufferBuilder;
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage};
 use vulkano::command_buffer::DynamicState;
+use vulkano::command_buffer::SecondaryAutoCommandBuffer;
 use vulkano::descriptor::descriptor_set::PersistentDescriptorSet;
 use vulkano::device::Queue;
-use vulkano::framebuffer::RenderPassAbstract;
-use vulkano::framebuffer::Subpass;
-use vulkano::image::ImageViewAccess;
+use vulkano::image::ImageViewAbstract;
 use vulkano::pipeline::blend::AttachmentBlend;
 use vulkano::pipeline::blend::BlendFactor;
 use vulkano::pipeline::blend::BlendOp;
 use vulkano::pipeline::GraphicsPipeline;
 use vulkano::pipeline::GraphicsPipelineAbstract;
 use vulkano::pipeline::viewport::Viewport;
-
-use std::sync::Arc;
+use vulkano::render_pass::Subpass;
 
 /// Allows applying an ambient lighting to a scene.
 pub struct AmbientLightingSystem {
@@ -35,8 +34,7 @@ pub struct AmbientLightingSystem {
 
 impl AmbientLightingSystem {
     /// Initializes the ambient lighting system.
-    pub fn new<R>(gfx_queue: Arc<Queue>, subpass: Subpass<R>) -> AmbientLightingSystem
-        where R: RenderPassAbstract + Send + Sync + 'static
+    pub fn new(gfx_queue: Arc<Queue>, subpass: Subpass) -> AmbientLightingSystem
     {
         // TODO: vulkano doesn't allow us to draw without a vertex buffer, otherwise we could
         //       hard-code these values in the shader
@@ -98,14 +96,14 @@ impl AmbientLightingSystem {
     /// - `ambient_color` is the color to apply.
     ///
     pub fn draw<C>(&self, viewport_dimensions: [u32; 2], color_input: C,
-                   ambient_color: [f32; 3]) -> AutoCommandBuffer
-        where C: ImageViewAccess + Send + Sync + 'static,
+                   ambient_color: [f32; 3]) -> SecondaryAutoCommandBuffer
+        where C: ImageViewAbstract + Send + Sync + 'static,
     {
         let push_constants = fs::ty::PushConstants {
             color: [ambient_color[0], ambient_color[1], ambient_color[2], 1.0],
         };
 
-        let layout = self.pipeline.descriptor_set_layout(0).unwrap();
+        let layout = self.pipeline.layout().descriptor_set_layout(0).unwrap();
         let descriptor_set = PersistentDescriptorSet::start(layout.clone())
             .add_image(color_input)
             .unwrap()
@@ -116,35 +114,42 @@ impl AmbientLightingSystem {
             viewports: Some(vec![Viewport {
                 origin: [0.0, 0.0],
                 dimensions: [viewport_dimensions[0] as f32,
-                            viewport_dimensions[1] as f32],
-                depth_range: 0.0 .. 1.0,
+                    viewport_dimensions[1] as f32],
+                depth_range: 0.0..1.0,
             }]),
-            .. DynamicState::none()
+            ..DynamicState::none()
         };
 
-        AutoCommandBufferBuilder::secondary_graphics(self.gfx_queue.device().clone(),
-                                                     self.gfx_queue.family(),
-                                                     self.pipeline.clone().subpass())
-            .unwrap()
-            .draw(self.pipeline.clone(),
-                  &dynamic_state,
-                  vec![self.vertex_buffer.clone()],
-                  descriptor_set,
-                  push_constants)
-            .unwrap()
-            .build()
-            .unwrap()
+        let mut builder = AutoCommandBufferBuilder::secondary_graphics(
+            self.gfx_queue.device().clone(),
+            self.gfx_queue.family(),
+            CommandBufferUsage::MultipleSubmit,
+            self.pipeline.subpass().clone(),
+        ).unwrap();
+
+        builder
+            .draw(
+                self.pipeline.clone(),
+                &dynamic_state,
+                vec![self.vertex_buffer.clone()],
+                descriptor_set,
+                push_constants,
+                vec![],
+            )
+            .unwrap();
+
+        builder.build().unwrap()
     }
 }
 
 #[derive(Default, Debug, Clone)]
 struct Vertex {
-    position: [f32; 2]
+    position: [f32; 2],
 }
 vulkano::impl_vertex!(Vertex, position);
 
 mod vs {
-    vulkano_shaders::shader!{
+    vulkano_shaders::shader! {
         ty: "vertex",
         src: "
 #version 450
@@ -158,7 +163,7 @@ void main() {
 }
 
 mod fs {
-    vulkano_shaders::shader!{
+    vulkano_shaders::shader! {
         ty: "fragment",
         src: "
 #version 450
