@@ -74,9 +74,9 @@ impl DirectionalLightingSystem {
         };
 
         DirectionalLightingSystem {
-            gfx_queue: gfx_queue,
-            vertex_buffer: vertex_buffer,
-            pipeline: pipeline,
+            gfx_queue,
+            vertex_buffer,
+            pipeline,
         }
     }
 

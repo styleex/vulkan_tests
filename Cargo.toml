@@ -13,4 +13,6 @@ cgmath = "0.18"
 time = "0.2"
 winit = "0.25"
 png = "0.16"
-genmesh = "0.6.2"
+
+imgui = "0.7.0"
+imgui-winit-support = { version = "0.7.1", default-features = false, features = ["winit-25"] }

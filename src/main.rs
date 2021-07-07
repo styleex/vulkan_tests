@@ -1,4 +1,7 @@
-use cgmath::{Matrix4, SquareMatrix};
+use cgmath::{Matrix4, SquareMatrix, Vector3};
+use imgui;
+use imgui::{Condition, Context, FontConfig, FontGlyphRanges, FontSource, im_str, Window};
+use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use vulkano::{swapchain, Version};
 use vulkano::device::{Device, DeviceExtensions};
 use vulkano::image::{ImageAccess, ImageUsage};
@@ -71,8 +74,47 @@ fn main() {
         (swapchain, images)
     };
 
+    // IMGUI
+    let mut imgui = Context::create();
+    imgui.set_ini_filename(None);
+
+    // if let Some(backend) = clipboard::init() {
+    //     imgui.set_clipboard_backend(Box::new(backend));
+    // } else {
+    //     eprintln!("Failed to initialize clipboard");
+    // }
+
+    let mut platform = WinitPlatform::init(&mut imgui);
+    {
+        platform.attach_window(imgui.io_mut(), &surface.window(), HiDpiMode::Rounded);
+    }
+
+    let hidpi_factor = platform.hidpi_factor();
+    let font_size = (13.0 * hidpi_factor) as f32;
+    imgui.fonts().add_font(&[
+        FontSource::DefaultFontData {
+            config: Some(FontConfig {
+                size_pixels: font_size,
+                ..FontConfig::default()
+            }),
+        },
+        FontSource::TtfData {
+            data: include_bytes!("../resources/font/mplus-1p-regular.ttf"),
+            size_pixels: font_size,
+            config: Some(FontConfig {
+                rasterizer_multiply: 1.75,
+                glyph_ranges: FontGlyphRanges::japanese(),
+                ..FontConfig::default()
+            }),
+        },
+    ]);
+
+    imgui.io_mut().font_global_scale = (1.0 / hidpi_factor) as f32;
+    // /IMGUI
+
     let mut picker = mouse_picker::Picker::new(queue.clone());
-    let mut frame_system = deferred::FrameSystem::new(queue.clone(), swapchain.format());
+
+    let mut frame_system = deferred::FrameSystem::new(queue.clone(), swapchain.format(), &mut imgui);
 
     let mut terrain_map = Map::new(40, 40);
     let mut terrain_rs = TerrainRenderSystem::new(queue.clone(),
@@ -85,13 +127,20 @@ fn main() {
     let mut cursor_pos = [0, 0];
     let mut cursor_pos_changed = false;
     let mut entity_id: Option<u32> = None;
+    let mut imgui_hovered = false;
 
     let mut previous_frame_end = Some(Box::new(sync::now(device.clone())) as Box<dyn GpuFuture>);
     event_loop.run(move |event, _, control_flow| {
-        match &event {
-            Event::WindowEvent { event, .. } => cam.handle_event(event),
-            _ => (),
+        if imgui_hovered {
+            cam.clear_mouse();
+        } else {
+            match &event {
+                Event::WindowEvent { event, .. } => cam.handle_event(event),
+                _ => (),
+            }
         }
+
+        platform.handle_event(imgui.io_mut(), surface.window(), &event);
 
         match event {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
@@ -122,8 +171,13 @@ fn main() {
                     terrain_map.select(entity_id);
                 }
             }
-
-            Event::RedrawEventsCleared => {
+            Event::MainEventsCleared => {
+                platform
+                    .prepare_frame(imgui.io_mut(), &surface.window())
+                    .expect("Failed to prepare frame");
+                surface.window().request_redraw();
+            }
+            Event::RedrawRequested(_) => {
                 previous_frame_end.as_mut().unwrap().cleanup_finished();
 
                 terrain_map.update();
@@ -162,7 +216,6 @@ fn main() {
                 }
 
                 if cursor_pos_changed {
-
                     let dims = images[image_num].image().dimensions().width_height();
 
                     let cb = terrain_rs.render(RenderPipeline::ObjectIdMap,
@@ -187,11 +240,24 @@ fn main() {
                             draw_pass.execute(cb);
                         }
                         deferred::Pass::Lighting(mut lighting) => {
-                            lighting.ambient_light([1.0, 1.0, 1.0]);
-//                            lighting.directional_light(Vector3::new(0.2, -0.1, -0.7), [0.6, 0.6, 0.6]);
+                            lighting.ambient_light([0.3, 0.3, 0.3]);
+                            lighting.directional_light(Vector3::new(-0.3, -1.0, -0.3), [0.6, 0.6, 0.6]);
 //                            lighting.point_light(Vector3::new(0.5, -0.5, -0.1), [1.0, 0.0, 0.0]);
 //                            lighting.point_light(Vector3::new(-0.9, 0.2, -0.15), [0.0, 1.0, 0.0]);
 //                            lighting.point_light(Vector3::new(0.0, 0.5, -0.05), [0.0, 0.0, 1.0]);
+                        }
+                        deferred::Pass::UI(mut ui_pass) => {
+                            ui_pass.draw(&mut imgui, ui_pass.viewport_dimensions(), |ui| {
+                                Window::new(im_str!("Stats"))
+                                    .size([100.0, 50.0], Condition::FirstUseEver)
+                                    .position([0.0, 0.0], Condition::FirstUseEver)
+                                    .build(&ui, || {
+                                        ui.text(format!("FPS: ({:.1})", ui.io().framerate));
+                                    });
+
+                                platform.prepare_render(&ui, surface.window());
+                                imgui_hovered = ui.is_any_item_active();
+                            });
                         }
                         deferred::Pass::Finished(af) => {
                             after_future = Some(af);

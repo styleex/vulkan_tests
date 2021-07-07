@@ -22,6 +22,7 @@ use vulkano::sync::GpuFuture;
 
 use crate::deferred::ambient_lighting_system::AmbientLightingSystem;
 use crate::deferred::directional_lighting_system::DirectionalLightingSystem;
+use crate::deferred::imgui_render_system::ImguiRenderSystem;
 use crate::deferred::point_lighting_system::PointLightingSystem;
 
 #[allow(dead_code)]
@@ -51,6 +52,8 @@ pub struct FrameSystem {
     directional_lighting_system: DirectionalLightingSystem,
     // Will allow us to add a spot light source to a scene during the second subpass.
     point_lighting_system: PointLightingSystem,
+
+    imgui_render_system: ImguiRenderSystem,
 }
 
 #[allow(dead_code)]
@@ -64,7 +67,7 @@ impl FrameSystem {
     ///   `frame()` method. We need to know that in advance. If that format ever changes, we have
     ///   to create a new `FrameSystem`.
     ///
-    pub fn new(gfx_queue: Arc<Queue>, final_output_format: Format) -> FrameSystem {
+    pub fn new(gfx_queue: Arc<Queue>, final_output_format: Format, imgui: &mut imgui::Context) -> FrameSystem {
         // Creating the render pass.
         //
         // The render pass has two subpasses. In the first subpass, we draw all the objects of the
@@ -188,7 +191,9 @@ impl FrameSystem {
         let directional_lighting_system =
             DirectionalLightingSystem::new(gfx_queue.clone(), lighting_subpass.clone());
         let point_lighting_system =
-            PointLightingSystem::new(gfx_queue.clone(), lighting_subpass);
+            PointLightingSystem::new(gfx_queue.clone(), lighting_subpass.clone());
+
+        let imgui_render_system = ImguiRenderSystem::new(imgui, gfx_queue.clone(), lighting_subpass.clone());
 
         FrameSystem {
             gfx_queue,
@@ -199,6 +204,7 @@ impl FrameSystem {
             ambient_lighting_system,
             directional_lighting_system,
             point_lighting_system,
+            imgui_render_system,
         }
     }
 
@@ -379,6 +385,10 @@ impl<'a> Frame<'a> {
             }
 
             2 => {
+                Some(Pass::UI(UiPass { frame: self }))
+            }
+
+            3 => {
                 // If we are in pass 2 then we have finished applying lighting.
                 // We take the builder, call `end_render_pass()`, and then `build()` it to obtain
                 // an actual command buffer.
@@ -417,6 +427,7 @@ pub enum Pass<'f, 's: 'f> {
     /// to add light sources.
     Lighting(LightingPass<'f, 's>),
 
+    UI(UiPass<'f, 's>),
     /// The frame has been fully prepared, and here is the future that will perform the drawing
     /// on the image.
     Finished(Box<dyn GpuFuture>),
@@ -431,8 +442,8 @@ impl<'f, 's: 'f> DrawPass<'f, 's> {
     /// Appends a command that executes a secondary command buffer that performs drawing.
     #[inline]
     pub fn execute<C>(&mut self, command_buffer: C)
-    where
-        C: SecondaryCommandBuffer + Send + Sync + 'static,
+        where
+            C: SecondaryCommandBuffer + Send + Sync + 'static,
     {
         self.frame
             .command_buffer_builder
@@ -528,5 +539,31 @@ impl<'f, 's: 'f> LightingPass<'f, 's> {
             .unwrap()
             .execute_commands(command_buffer)
             .unwrap();
+    }
+}
+
+
+/// Allows the user to apply lighting on the scene.
+pub struct UiPass<'f, 's: 'f> {
+    frame: &'f mut Frame<'s>,
+}
+
+#[allow(dead_code)]
+impl<'f, 's: 'f> UiPass<'f, 's> {
+    pub fn draw<F: FnMut(&mut imgui::Ui)>(&mut self, ctx: &mut imgui::Context, dims: [u32; 2], f: F) {
+        let command_buffer = self.frame.system.imgui_render_system.draw(ctx, dims, f);
+
+        self.frame
+            .command_buffer_builder
+            .as_mut()
+            .unwrap()
+            .execute_commands(command_buffer)
+            .unwrap();
+    }
+
+    #[inline]
+    pub fn viewport_dimensions(&self) -> [u32; 2] {
+        let dims = self.frame.framebuffer.dimensions();
+        [dims[0], dims[1]]
     }
 }
