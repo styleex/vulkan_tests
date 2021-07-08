@@ -197,7 +197,7 @@ impl Picker {
 
         let dims = self.object_id_buffer.image().dimensions().width_height();
         if !(0..dims[0]).contains(&x) || !(0..dims[1]).contains(&y) {
-            return None
+            return None;
         }
 
         command_buffer_builder
@@ -221,5 +221,3 @@ impl Picker {
         get_entity_id(buffer_content[0], buffer_content[1], buffer_content[2], buffer_content[3])
     }
 }
-
-

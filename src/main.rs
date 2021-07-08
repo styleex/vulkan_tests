@@ -25,7 +25,6 @@ mod camera;
 mod deferred;
 
 mod terrain_game;
-mod block_render;
 mod terrain_render_system;
 mod cube;
 mod mouse_picker;
