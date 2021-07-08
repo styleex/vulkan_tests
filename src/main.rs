@@ -2,7 +2,7 @@ use cgmath::{Matrix4, SquareMatrix, Vector3};
 use imgui;
 use imgui::{Condition, Context, FontConfig, FontGlyphRanges, FontSource, im_str, Window};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
-use vulkano::{swapchain, Version};
+use vulkano::{swapchain, Version, image};
 use vulkano::device::{Device, DeviceExtensions};
 use vulkano::image::{ImageAccess, ImageUsage};
 use vulkano::image::view::ImageView;
@@ -29,6 +29,8 @@ mod block_render;
 mod terrain_render_system;
 mod cube;
 mod mouse_picker;
+
+
 
 fn main() {
     let required_extensions = vulkano_win::required_extensions();
@@ -78,16 +80,8 @@ fn main() {
     let mut imgui = Context::create();
     imgui.set_ini_filename(None);
 
-    // if let Some(backend) = clipboard::init() {
-    //     imgui.set_clipboard_backend(Box::new(backend));
-    // } else {
-    //     eprintln!("Failed to initialize clipboard");
-    // }
-
     let mut platform = WinitPlatform::init(&mut imgui);
-    {
-        platform.attach_window(imgui.io_mut(), &surface.window(), HiDpiMode::Rounded);
-    }
+    platform.attach_window(imgui.io_mut(), &surface.window(), HiDpiMode::Rounded);
 
     let hidpi_factor = platform.hidpi_factor();
     let font_size = (13.0 * hidpi_factor) as f32;
@@ -114,7 +108,7 @@ fn main() {
 
     let mut picker = mouse_picker::Picker::new(queue.clone());
 
-    let mut frame_system = deferred::FrameSystem::new(queue.clone(), swapchain.format(), &mut imgui);
+    let mut frame_system = deferred::FrameSystem::new(queue.clone(), swapchain.format(), &mut imgui, image::SampleCount::Sample8);
 
     let mut terrain_map = Map::new(40, 40);
     let mut terrain_rs = TerrainRenderSystem::new(queue.clone(),
@@ -156,8 +150,6 @@ fn main() {
                         return;
                     }
                 }
-
-                cam.handle_keyboard(input);
             }
             Event::WindowEvent { event: WindowEvent::CursorMoved { position, .. }, .. } => {
                 if cursor_pos != [position.x as u32, position.y as u32] {
@@ -229,22 +221,28 @@ fn main() {
                 }
 
                 let future = previous_frame_end.take().unwrap().join(acquire_future);
-                let mut frame = frame_system.frame(future, images[image_num].clone(), Matrix4::identity());
+                let mut frame = frame_system.frame(future, images[image_num].clone(), world * cam.view_matrix() * cam.proj_matrix());
                 let mut after_future = None;
                 while let Some(pass) = frame.next_pass() {
                     match pass {
                         deferred::Pass::Deferred(mut draw_pass) => {
-                            let cb = terrain_rs.render(RenderPipeline::Diffuse,
-                                                       &terrain_map, draw_pass.viewport_dimensions(),
-                                                       world, cam.view_matrix(), cam.proj_matrix());
+                            let cb = terrain_rs
+                                .render(
+                                    RenderPipeline::Diffuse,
+                                    &terrain_map,
+                                    draw_pass.viewport_dimensions(),
+                                    world,
+                                    cam.view_matrix(),
+                                    cam.proj_matrix(),
+                                );
                             draw_pass.execute(cb);
                         }
                         deferred::Pass::Lighting(mut lighting) => {
                             lighting.ambient_light([0.3, 0.3, 0.3]);
-                            lighting.directional_light(Vector3::new(-0.3, -1.0, -0.3), [0.6, 0.6, 0.6]);
-//                            lighting.point_light(Vector3::new(0.5, -0.5, -0.1), [1.0, 0.0, 0.0]);
-//                            lighting.point_light(Vector3::new(-0.9, 0.2, -0.15), [0.0, 1.0, 0.0]);
-//                            lighting.point_light(Vector3::new(0.0, 0.5, -0.05), [0.0, 0.0, 1.0]);
+                            // lighting.directional_light(Vector3::new(-0.3, -1.0, -0.3), [0.6, 0.6, 0.6]);
+                           lighting.point_light(Vector3::new(-5.0, 1.2, -5.0), [0.9, 0.9, 0.9]);
+                           // lighting.point_light(Vector3::new(-0.9, 0.2, -0.15), [0.0, 1.0, 0.0]);
+                           // lighting.point_light(Vector3::new(0.0, 0.5, -0.05), [0.0, 0.0, 1.0]);
                         }
                         deferred::Pass::UI(mut ui_pass) => {
                             ui_pass.draw(&mut imgui, ui_pass.viewport_dimensions(), |ui| {

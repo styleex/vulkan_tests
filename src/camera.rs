@@ -1,9 +1,9 @@
-use cgmath::{Vector3, Matrix4, SquareMatrix, Point3, vec3, Deg};
-use cgmath::{Rad, Angle};
-use winit::event::{KeyboardInput, ElementState, VirtualKeyCode, WindowEvent, MouseButton};
-use cgmath::InnerSpace;
 use std::f32;
 
+use cgmath::{Deg, Matrix4, Point3, SquareMatrix, vec3, Vector3};
+use cgmath::{Angle, Rad};
+use cgmath::InnerSpace;
+use winit::event::{ElementState, MouseButton, VirtualKeyCode, WindowEvent};
 
 pub struct Camera {
     position: Point3<f32>,
@@ -53,27 +53,27 @@ impl Camera {
         self.proj
     }
 
-    pub fn handle_keyboard(&mut self, input: KeyboardInput) {
-        if input.state == ElementState::Pressed {
-            match input.virtual_keycode {
-                Some(VirtualKeyCode::W) => self.position += self.view_dir * 0.3,
-                Some(VirtualKeyCode::S) => self.position -= self.view_dir * 0.3,
-
-                Some(VirtualKeyCode::A) => self.position -= self.view_dir.cross(self.up_dir) * 0.3,
-                Some(VirtualKeyCode::D) => self.position += self.view_dir.cross(self.up_dir) * 0.3,
-                Some(VirtualKeyCode::Space) => self.position.y += 0.1,
-                Some(VirtualKeyCode::LShift) => self.position.y -= 0.1,
-                _ => (),
-            }
-        }
-    }
-
     pub fn clear_mouse(&mut self) {
         self.mouse_pressed = false;
     }
 
     pub fn handle_event(&mut self, event: &WindowEvent) {
         match event {
+            &WindowEvent::KeyboardInput { input, .. } => {
+                if input.state == ElementState::Pressed {
+                    match input.virtual_keycode {
+                        Some(VirtualKeyCode::W) => self.position += self.view_dir * 0.3,
+                        Some(VirtualKeyCode::S) => self.position -= self.view_dir * 0.3,
+
+                        Some(VirtualKeyCode::A) => self.position -= self.view_dir.cross(self.up_dir) * 0.3,
+                        Some(VirtualKeyCode::D) => self.position += self.view_dir.cross(self.up_dir) * 0.3,
+                        Some(VirtualKeyCode::Space) => self.position.y += 0.1,
+                        Some(VirtualKeyCode::LShift) => self.position.y -= 0.1,
+                        _ => (),
+                    }
+                }
+            }
+
             &WindowEvent::MouseInput { state, button, .. } => {
                 self.mouse_pressed = (state == ElementState::Pressed) && (button == MouseButton::Left);
             }
@@ -85,7 +85,7 @@ impl Camera {
 
                 let pos: [i32; 2] = position.into();
                 let sensitivity = 0.5;
-                let dx = (pos[0]- self.last_mouse_position[0]) as f32 * sensitivity;
+                let dx = (pos[0] - self.last_mouse_position[0]) as f32 * sensitivity;
                 let dy = (pos[1] - self.last_mouse_position[1]) as f32 * sensitivity;
                 self.last_mouse_position = position.into();
 

@@ -16,6 +16,7 @@ use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, Prim
 use vulkano::device::Queue;
 use vulkano::format::Format;
 use vulkano::image::{AttachmentImage, ImageUsage, ImageViewAbstract};
+use vulkano::image;
 use vulkano::image::view::ImageView;
 use vulkano::render_pass::{Framebuffer, FramebufferAbstract, RenderPass, Subpass};
 use vulkano::sync::GpuFuture;
@@ -42,6 +43,7 @@ pub struct FrameSystem {
     // pixel of the scene.
     // The normal vector is the vector perpendicular to the surface of the object at this point.
     normals_buffer: Arc<ImageView<Arc<AttachmentImage>>>,
+    positions_buffer: Arc<ImageView<Arc<AttachmentImage>>>,
     // Intermediate render target that will contain the depth of each pixel of the scene.
     // This is a traditional depth buffer. `0.0` means "near", and `1.0` means "far".
     depth_buffer: Arc<ImageView<Arc<AttachmentImage>>>,
@@ -54,6 +56,8 @@ pub struct FrameSystem {
     point_lighting_system: PointLightingSystem,
 
     imgui_render_system: ImguiRenderSystem,
+
+    sample_count: image::SampleCount,
 }
 
 #[allow(dead_code)]
@@ -67,7 +71,7 @@ impl FrameSystem {
     ///   `frame()` method. We need to know that in advance. If that format ever changes, we have
     ///   to create a new `FrameSystem`.
     ///
-    pub fn new(gfx_queue: Arc<Queue>, final_output_format: Format, imgui: &mut imgui::Context) -> FrameSystem {
+    pub fn new(gfx_queue: Arc<Queue>, final_output_format: Format, imgui: &mut imgui::Context, samples_count: image::SampleCount) -> FrameSystem {
         // Creating the render pass.
         //
         // The render pass has two subpasses. In the first subpass, we draw all the objects of the
@@ -109,28 +113,34 @@ impl FrameSystem {
                 diffuse: {
                     load: Clear,
                     store: DontCare,
-                    format: Format::A2B10G10R10UnormPack32,
-                    samples: 1,
+                    format: Format::R8G8B8A8Unorm,
+                    samples: samples_count,
                 },
                 // Will be bound to `self.normals_buffer`.
                 normals: {
                     load: Clear,
                     store: DontCare,
                     format: Format::R16G16B16A16Sfloat,
-                    samples: 1,
+                    samples: samples_count,
+                },
+                positions: {
+                    load: Clear,
+                    store: DontCare,
+                    format: Format::R16G16B16A16Sfloat,
+                    samples: samples_count,
                 },
                 // Will be bound to `self.depth_buffer`.
                 depth: {
                     load: Clear,
                     store: DontCare,
                     format: Format::D32Sfloat,
-                    samples: 1,
+                    samples: samples_count,
                 }
             },
             passes: [
                 // Write to the diffuse, normals and depth attachments.
                 {
-                    color: [diffuse, normals],
+                    color: [diffuse, normals, positions],
                     depth_stencil: {depth},
                     input: []
                 },
@@ -138,7 +148,7 @@ impl FrameSystem {
                 {
                     color: [final_color],
                     depth_stencil: {},
-                    input: [diffuse, normals, depth]
+                    input: [diffuse, normals, positions, depth]
                 }
             ]
         ).unwrap(),
@@ -153,29 +163,45 @@ impl FrameSystem {
             ..ImageUsage::none()
         };
         let diffuse_buffer = ImageView::new(
-            AttachmentImage::with_usage(
+            AttachmentImage::multisampled_with_usage(
                 gfx_queue.device().clone(),
                 [1, 1],
-                Format::A2B10G10R10UnormPack32,
+                samples_count,
+                Format::R8G8B8A8Unorm,
                 atch_usage,
             )
                 .unwrap(),
         )
             .unwrap();
         let normals_buffer = ImageView::new(
-            AttachmentImage::with_usage(
+            AttachmentImage::multisampled_with_usage(
                 gfx_queue.device().clone(),
                 [1, 1],
+                samples_count,
                 Format::R16G16B16A16Sfloat,
                 atch_usage,
             )
                 .unwrap(),
         )
             .unwrap();
-        let depth_buffer = ImageView::new(
-            AttachmentImage::with_usage(
+
+        let positions_buffer = ImageView::new(
+            AttachmentImage::multisampled_with_usage(
                 gfx_queue.device().clone(),
                 [1, 1],
+                samples_count,
+                Format::R16G16B16A16Sfloat,
+                atch_usage,
+            )
+                .unwrap(),
+        )
+            .unwrap();
+
+        let depth_buffer = ImageView::new(
+            AttachmentImage::multisampled_with_usage(
+                gfx_queue.device().clone(),
+                [1, 1],
+                samples_count,
                 Format::D32Sfloat,
                 atch_usage,
             )
@@ -187,11 +213,11 @@ impl FrameSystem {
         // Note that we need to pass to them the subpass where they will be executed.
         let lighting_subpass = Subpass::from(render_pass.clone(), 1).unwrap();
         let ambient_lighting_system =
-            AmbientLightingSystem::new(gfx_queue.clone(), lighting_subpass.clone());
+            AmbientLightingSystem::new(gfx_queue.clone(), lighting_subpass.clone(), samples_count);
         let directional_lighting_system =
-            DirectionalLightingSystem::new(gfx_queue.clone(), lighting_subpass.clone());
+            DirectionalLightingSystem::new(gfx_queue.clone(), lighting_subpass.clone(), samples_count);
         let point_lighting_system =
-            PointLightingSystem::new(gfx_queue.clone(), lighting_subpass.clone());
+            PointLightingSystem::new(gfx_queue.clone(), lighting_subpass.clone(), samples_count);
 
         let imgui_render_system = ImguiRenderSystem::new(imgui, gfx_queue.clone(), lighting_subpass.clone());
 
@@ -200,11 +226,13 @@ impl FrameSystem {
             render_pass: render_pass as Arc<_>,
             diffuse_buffer,
             normals_buffer,
+            positions_buffer,
             depth_buffer,
             ambient_lighting_system,
             directional_lighting_system,
             point_lighting_system,
             imgui_render_system,
+            sample_count: samples_count,
         }
     }
 
@@ -248,29 +276,43 @@ impl FrameSystem {
             // them in a subpass then read them in another subpass, but as soon as you leave the
             // render pass their content becomes undefined.
             self.diffuse_buffer = ImageView::new(
-                AttachmentImage::with_usage(
+                AttachmentImage::multisampled_with_usage(
                     self.gfx_queue.device().clone(),
                     img_dims,
-                    Format::A2B10G10R10UnormPack32,
+                    self.sample_count,
+                    Format::R8G8B8A8Unorm,
                     atch_usage,
                 )
                     .unwrap(),
             )
                 .unwrap();
             self.normals_buffer = ImageView::new(
-                AttachmentImage::with_usage(
+                AttachmentImage::multisampled_with_usage(
                     self.gfx_queue.device().clone(),
                     img_dims,
+                    self.sample_count,
                     Format::R16G16B16A16Sfloat,
                     atch_usage,
                 )
                     .unwrap(),
             )
                 .unwrap();
-            self.depth_buffer = ImageView::new(
-                AttachmentImage::with_usage(
+
+            self.positions_buffer = ImageView::new(
+                AttachmentImage::multisampled_with_usage(
                     self.gfx_queue.device().clone(),
                     img_dims,
+                    self.sample_count,
+                    Format::R16G16B16A16Sfloat,
+                    atch_usage,
+                ).unwrap(),
+            ).unwrap();
+
+            self.depth_buffer = ImageView::new(
+                AttachmentImage::multisampled_with_usage(
+                    self.gfx_queue.device().clone(),
+                    img_dims,
+                    self.sample_count,
                     Format::D32Sfloat,
                     atch_usage,
                 )
@@ -288,6 +330,8 @@ impl FrameSystem {
                 .add(self.diffuse_buffer.clone())
                 .unwrap()
                 .add(self.normals_buffer.clone())
+                .unwrap()
+                .add(self.positions_buffer.clone())
                 .unwrap()
                 .add(self.depth_buffer.clone())
                 .unwrap()
@@ -308,6 +352,7 @@ impl FrameSystem {
                 framebuffer.clone(),
                 SubpassContents::SecondaryCommandBuffers,
                 vec![
+                    [0.0, 0.0, 0.0, 0.0].into(),
                     [0.0, 0.0, 0.0, 0.0].into(),
                     [0.0, 0.0, 0.0, 0.0].into(),
                     [0.0, 0.0, 0.0, 0.0].into(),
@@ -526,6 +571,7 @@ impl<'f, 's: 'f> LightingPass<'f, 's> {
                 [dims[0], dims[1]],
                 self.frame.system.diffuse_buffer.clone(),
                 self.frame.system.normals_buffer.clone(),
+                self.frame.system.positions_buffer.clone(),
                 self.frame.system.depth_buffer.clone(),
                 self.frame.world_to_framebuffer.invert().unwrap(),
                 position,

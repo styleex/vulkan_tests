@@ -19,6 +19,7 @@ use vulkano::pipeline::{GraphicsPipeline, GraphicsPipelineAbstract};
 use vulkano::pipeline::blend::{AttachmentBlend, BlendFactor, BlendOp};
 use vulkano::pipeline::viewport::Viewport;
 use vulkano::render_pass::Subpass;
+use vulkano::image;
 
 #[allow(dead_code)]
 /// Allows applying a directional light source to a scene.
@@ -31,7 +32,7 @@ pub struct DirectionalLightingSystem {
 #[allow(dead_code)]
 impl DirectionalLightingSystem {
     /// Initializes the directional lighting system.
-    pub fn new(gfx_queue: Arc<Queue>, subpass: Subpass) -> DirectionalLightingSystem
+    pub fn new(gfx_queue: Arc<Queue>, subpass: Subpass, samples_count: image::SampleCount) -> DirectionalLightingSystem
     {
         // TODO: vulkano doesn't allow us to draw without a vertex buffer, otherwise we could
         //       hard-code these values in the shader
@@ -49,12 +50,16 @@ impl DirectionalLightingSystem {
             let fs = fs::Shader::load(gfx_queue.device().clone())
                 .expect("failed to create shader module");
 
+            let spec_consts = fs::SpecializationConstants {
+                NUM_SAMPLES: samples_count as i32,
+            };
+
             Arc::new(GraphicsPipeline::start()
                 .vertex_input_single_buffer::<Vertex>()
                 .vertex_shader(vs.main_entry_point(), ())
                 .triangle_list()
                 .viewports_dynamic_scissors_irrelevant(1)
-                .fragment_shader(fs.main_entry_point(), ())
+                .fragment_shader(fs.main_entry_point(), spec_consts)
                 .blend_collective(AttachmentBlend {
                     enabled: true,
                     color_op: BlendOp::Add,
@@ -137,12 +142,12 @@ impl DirectionalLightingSystem {
             .unwrap();
 
         builder.draw(self.pipeline.clone(),
-                  &dynamic_state,
-                  vec![self.vertex_buffer.clone()],
-                  descriptor_set,
-                  push_constants,
-                  vec![],
-            )
+                     &dynamic_state,
+                     vec![self.vertex_buffer.clone()],
+                     descriptor_set,
+                     push_constants,
+                     vec![],
+        )
             .unwrap();
 
         builder.build().unwrap()
@@ -175,31 +180,33 @@ mod fs {
         src: "
 #version 450
 
-// The `color_input` parameter of the `draw` method.
-layout(input_attachment_index = 0, set = 0, binding = 0) uniform subpassInput u_diffuse;
-// The `normals_input` parameter of the `draw` method.
-layout(input_attachment_index = 1, set = 0, binding = 1) uniform subpassInput u_normals;
+layout(input_attachment_index = 0, set = 0, binding = 0) uniform subpassInputMS u_diffuse;
+layout(input_attachment_index = 1, set = 0, binding = 1) uniform subpassInputMS u_normals;
 
 layout(push_constant) uniform PushConstants {
-    // The `color` parameter of the `draw` method.
     vec4 color;
-    // The `direction` parameter of the `draw` method.
     vec4 direction;
 } push_constants;
 
 layout(location = 0) out vec4 f_color;
 
-void main() {
-    vec3 in_normal = normalize(subpassLoad(u_normals).rgb);
-    // If the normal is perpendicular to the direction of the lighting, then `light_percent` will
-    // be 0. If the normal is parallel to the direction of the lightin, then `light_percent` will
-    // be 1. Any other angle will yield an intermediate value.
-    float light_percent = -dot(push_constants.direction.xyz, in_normal);
-    // `light_percent` must not go below 0.0. There's no such thing as negative lighting.
-    light_percent = max(light_percent, 0.0);
+layout (constant_id = 0) const int NUM_SAMPLES = 8;
 
-    vec3 in_diffuse = subpassLoad(u_diffuse).rgb;
-    f_color.rgb = light_percent * push_constants.color.rgb * in_diffuse;
+void main() {
+    vec3 ret = vec3(0.0);
+
+    for (int i = 0; i < NUM_SAMPLES; i++) {
+        vec3 in_normal = normalize(subpassLoad(u_normals, i).rgb);
+        float light_percent = -dot(push_constants.direction.xyz, in_normal);
+
+        light_percent = max(light_percent, 0.0);
+
+        vec3 in_diffuse = subpassLoad(u_diffuse, i).rgb;
+
+        ret += light_percent * push_constants.color.rgb * in_diffuse;
+    }
+
+    f_color.rgb = ret / NUM_SAMPLES;
     f_color.a = 1.0;
 }"
     }

@@ -130,6 +130,7 @@ impl Picker {
     pub fn draw<C>(&mut self, img_dims: [u32; 2], cmds: Vec<C>, x: u32, y: u32) -> Option<u32>
         where C: SecondaryCommandBuffer + Send + Sync + 'static
     {
+        // Recreate framebuffer
         if self.object_id_buffer.image().dimensions().width_height() != img_dims {
             let obj_id_usage = ImageUsage {
                 transfer_source: true, // This is necessary to copy to external buffer

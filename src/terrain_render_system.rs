@@ -57,7 +57,6 @@ impl TerrainRenderSystem {
                 .render_pass(main_subpass)
                 .cull_mode_back()
                 .front_face_counter_clockwise()
-//                .polygon_mode_line()
                 .depth_stencil_simple_depth()
                 .build(gfx_queue.device().clone())
                 .unwrap())
@@ -215,9 +214,11 @@ mod vs {
 
             void main() {
                 mat4 worldview = uniforms.view;// * uniforms.world;
+
                 vec3 s_pos = position;
                 s_pos.x += position_offset.x;
                 s_pos.z -= position_offset.y;
+
                 gl_Position = uniforms.proj * worldview * vec4(s_pos, 1.0);
 
                 rpos = s_pos;
@@ -237,6 +238,7 @@ mod fs {
 
             layout(location = 0) out vec4 f_color;
             layout(location = 1) out vec4 f_normal;
+            layout(location = 2) out vec4 f_position;
 
 
             layout(location = 1) in vec3 in_normal;
@@ -245,11 +247,9 @@ mod fs {
             layout(location=5) in vec4 in_hightlight;
 
             void main() {
-                vec3 light_pos = normalize(vec3(-0.0, 2.0, 1.0));
-                float light_percent = max(-dot(light_pos, in_normal), 0.0);
-
-                f_color = vec4(in_color, 1.0) * in_hightlight.x + vec4(0.0, 0.0, 1.0, 1.0) * (1 - in_hightlight.x); //vec4(1.0, 1.0, 0.0, 1.0);
+                f_color = vec4(in_color, 1.0) * in_hightlight.x + vec4(0.0, 0.0, 1.0, 1.0) * (1 - in_hightlight.x);
                 f_normal = vec4(in_normal, 1.0);
+                f_position = vec4(in_world, 1.0);
             }
         "
     }

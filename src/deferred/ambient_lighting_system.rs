@@ -24,6 +24,7 @@ use vulkano::pipeline::GraphicsPipeline;
 use vulkano::pipeline::GraphicsPipelineAbstract;
 use vulkano::pipeline::viewport::Viewport;
 use vulkano::render_pass::Subpass;
+use vulkano::image;
 
 /// Allows applying an ambient lighting to a scene.
 pub struct AmbientLightingSystem {
@@ -34,7 +35,7 @@ pub struct AmbientLightingSystem {
 
 impl AmbientLightingSystem {
     /// Initializes the ambient lighting system.
-    pub fn new(gfx_queue: Arc<Queue>, subpass: Subpass) -> AmbientLightingSystem
+    pub fn new(gfx_queue: Arc<Queue>, subpass: Subpass, samples_count: image::SampleCount) -> AmbientLightingSystem
     {
         // TODO: vulkano doesn't allow us to draw without a vertex buffer, otherwise we could
         //       hard-code these values in the shader
@@ -52,12 +53,18 @@ impl AmbientLightingSystem {
             let fs = fs::Shader::load(gfx_queue.device().clone())
                 .expect("failed to create shader module");
 
+            let spec_consts = fs::SpecializationConstants {
+                NUM_SAMPLES: samples_count as i32,
+            };
+
+            println!("{:?}", samples_count as i32);
+
             Arc::new(GraphicsPipeline::start()
                 .vertex_input_single_buffer::<Vertex>()
                 .vertex_shader(vs.main_entry_point(), ())
                 .triangle_list()
                 .viewports_dynamic_scissors_irrelevant(1)
-                .fragment_shader(fs.main_entry_point(), ())
+                .fragment_shader(fs.main_entry_point(), spec_consts)
                 .blend_collective(AttachmentBlend {
                     enabled: true,
                     color_op: BlendOp::Add,
@@ -169,7 +176,7 @@ mod fs {
 #version 450
 
 // The `color_input` parameter of the `draw` method.
-layout(input_attachment_index = 0, set = 0, binding = 0) uniform subpassInput u_diffuse;
+layout(input_attachment_index = 0, set = 0, binding = 0) uniform subpassInputMS u_diffuse;
 
 layout(push_constant) uniform PushConstants {
     // The `ambient_color` parameter of the `draw` method.
@@ -178,10 +185,22 @@ layout(push_constant) uniform PushConstants {
 
 layout(location = 0) out vec4 f_color;
 
+layout (constant_id = 0) const int NUM_SAMPLES = 8;
+
 void main() {
     // Load the value at the current pixel.
-    vec3 in_diffuse = subpassLoad(u_diffuse).rgb;
-    f_color.rgb = push_constants.color.rgb * in_diffuse;
+    // vec3 in_diffuse = subpassLoad(u_diffuse, gl_SampleID).rgb;
+
+	vec4 result = vec4(0.0);
+	for (int i = 0; i < NUM_SAMPLES; i++)
+	{
+		vec4 val = subpassLoad(u_diffuse, i);
+		result += val;
+	}
+	// Average resolved samples
+	result = result / float(NUM_SAMPLES);
+
+    f_color.rgb = push_constants.color.rgb * result.rgb;
     f_color.a = 1.0;
 }"
     }
