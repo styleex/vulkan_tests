@@ -23,12 +23,12 @@ use crate::terrain_render_system::{RenderPipeline, TerrainRenderSystem};
 mod terrain;
 mod camera;
 mod deferred;
+mod deferred2;
 
 mod terrain_game;
 mod terrain_render_system;
 mod cube;
 mod mouse_picker;
-
 
 
 fn main() {
@@ -74,6 +74,15 @@ fn main() {
             .collect::<Vec<_>>();
         (swapchain, images)
     };
+
+    let mut dd2 = {
+        let dimensions: [u32; 2] = surface.window().inner_size().into();
+        deferred2::Framebuffer::new(queue.clone(), dimensions[0], dimensions[1])
+    };
+
+    dd2.add_view(vulkano::format::Format::R16G16B16A16Sfloat, vulkano::image::SampleCount::Sample8);
+    dd2.add_view(vulkano::format::Format::D32Sfloat, vulkano::image::SampleCount::Sample8);
+    dd2.create_framebuffer();
 
     // IMGUI
     let mut imgui = Context::create();
