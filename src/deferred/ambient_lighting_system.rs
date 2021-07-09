@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use vulkano::{image, sampler};
 use vulkano::buffer::BufferUsage;
 use vulkano::buffer::CpuAccessibleBuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage};
@@ -24,13 +25,13 @@ use vulkano::pipeline::GraphicsPipeline;
 use vulkano::pipeline::GraphicsPipelineAbstract;
 use vulkano::pipeline::viewport::Viewport;
 use vulkano::render_pass::Subpass;
-use vulkano::image;
 
 /// Allows applying an ambient lighting to a scene.
 pub struct AmbientLightingSystem {
     gfx_queue: Arc<Queue>,
     vertex_buffer: Arc<CpuAccessibleBuffer<[Vertex]>>,
     pipeline: Arc<dyn GraphicsPipelineAbstract + Send + Sync>,
+    sampler: Arc<sampler::Sampler>,
 }
 
 impl AmbientLightingSystem {
@@ -83,10 +84,19 @@ impl AmbientLightingSystem {
                 .unwrap()) as Arc<_>
         };
 
+        let sampler = sampler::Sampler::new(gfx_queue.device().clone(), sampler::Filter::Linear,
+                                            sampler::Filter::Linear,
+                                            sampler::MipmapMode::Nearest,
+                                            sampler::SamplerAddressMode::Repeat,
+                                            sampler::SamplerAddressMode::Repeat,
+                                            sampler::SamplerAddressMode::Repeat, 1.0, 1.0,
+                                            0.0, 100.0).unwrap();
+        ;
         AmbientLightingSystem {
             gfx_queue: gfx_queue,
             vertex_buffer: vertex_buffer,
             pipeline: pipeline,
+            sampler,
         }
     }
 
@@ -112,7 +122,7 @@ impl AmbientLightingSystem {
 
         let layout = self.pipeline.layout().descriptor_set_layout(0).unwrap();
         let descriptor_set = PersistentDescriptorSet::start(layout.clone())
-            .add_image(color_input)
+            .add_sampled_image(color_input, self.sampler.clone())
             .unwrap()
             .build()
             .unwrap();
@@ -162,9 +172,12 @@ mod vs {
 #version 450
 
 layout(location = 0) in vec2 position;
+layout (location = 1) out vec2 outUV;
 
 void main() {
     gl_Position = vec4(position, 0.0, 1.0);
+    outUV = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
+
 }"
     }
 }
@@ -176,7 +189,7 @@ mod fs {
 #version 450
 
 // The `color_input` parameter of the `draw` method.
-layout(input_attachment_index = 0, set = 0, binding = 0) uniform subpassInputMS u_diffuse;
+layout(set = 0, binding = 0) uniform sampler2DMS u_diffuse;
 
 layout(push_constant) uniform PushConstants {
     // The `ambient_color` parameter of the `draw` method.
@@ -187,14 +200,13 @@ layout(location = 0) out vec4 f_color;
 
 layout (constant_id = 0) const int NUM_SAMPLES = 8;
 
-void main() {
-    // Load the value at the current pixel.
-    // vec3 in_diffuse = subpassLoad(u_diffuse, gl_SampleID).rgb;
+layout (location = 1) in vec2 inUV;
 
+void main() {
 	vec4 result = vec4(0.0);
 	for (int i = 0; i < NUM_SAMPLES; i++)
 	{
-		vec4 val = subpassLoad(u_diffuse, i);
+		vec4 val = texelFetch(u_diffuse, ivec2(gl_FragCoord.xy), i);
 		result += val;
 	}
 	// Average resolved samples

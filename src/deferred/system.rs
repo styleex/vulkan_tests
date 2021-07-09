@@ -99,7 +99,7 @@ impl FrameSystem {
         // but can't deal with these restrictions, then you should create multiple render passes
         // instead.
         let render_pass = Arc::new(
-            vulkano::ordered_passes_renderpass!(gfx_queue.device().clone(),
+            vulkano::single_pass_renderpass!(gfx_queue.device().clone(),
             attachments: {
                 // The image that will contain the final rendering (in this example the swapchain
                 // image, but it could be another image).
@@ -108,49 +108,12 @@ impl FrameSystem {
                     store: Store,
                     format: final_output_format,
                     samples: 1,
-                },
-                // Will be bound to `self.diffuse_buffer`.
-                diffuse: {
-                    load: Clear,
-                    store: DontCare,
-                    format: Format::R8G8B8A8Unorm,
-                    samples: samples_count,
-                },
-                // Will be bound to `self.normals_buffer`.
-                normals: {
-                    load: Clear,
-                    store: DontCare,
-                    format: Format::R16G16B16A16Sfloat,
-                    samples: samples_count,
-                },
-                positions: {
-                    load: Clear,
-                    store: DontCare,
-                    format: Format::R16G16B16A16Sfloat,
-                    samples: samples_count,
-                },
-                // Will be bound to `self.depth_buffer`.
-                depth: {
-                    load: Clear,
-                    store: DontCare,
-                    format: Format::D32Sfloat,
-                    samples: samples_count,
                 }
             },
-            passes: [
-                // Write to the diffuse, normals and depth attachments.
-                {
-                    color: [diffuse, normals, positions],
-                    depth_stencil: {depth},
-                    input: []
-                },
-                // Apply lighting by reading these three attachments and writing to `final_color`.
-                {
+            pass: {
                     color: [final_color],
-                    depth_stencil: {},
-                    input: [diffuse, normals, positions, depth]
+                    depth_stencil: {}
                 }
-            ]
         ).unwrap(),
         );
 
@@ -211,7 +174,7 @@ impl FrameSystem {
 
         // Initialize the three lighting systems.
         // Note that we need to pass to them the subpass where they will be executed.
-        let lighting_subpass = Subpass::from(render_pass.clone(), 1).unwrap();
+        let lighting_subpass = Subpass::from(render_pass.clone(), 0).unwrap();
         let ambient_lighting_system =
             AmbientLightingSystem::new(gfx_queue.clone(), lighting_subpass.clone(), samples_count);
         let directional_lighting_system =
@@ -256,70 +219,72 @@ impl FrameSystem {
     ///   the world into 2D coordinates on the framebuffer.
     ///
     pub fn frame<F, I>(&mut self, before_future: F, final_image: I,
-                       world_to_framebuffer: Matrix4<f32>) -> Frame
+                       world_to_framebuffer: Matrix4<f32>, diffuse_buffer: Arc<ImageView<Arc<AttachmentImage>>>) -> Frame
         where F: GpuFuture + 'static,
               I: ImageViewAbstract + Clone + Send + Sync + 'static
     {
+        self.diffuse_buffer = diffuse_buffer.clone();
+
         // First of all we recreate `self.diffuse_buffer`, `self.normals_buffer` and
         // `self.depth_buffer` if their dimensions doesn't match the dimensions of the final image.
-        let img_dims = final_image.image().dimensions().width_height();
-        if self.diffuse_buffer.image().dimensions().width_height() != img_dims {
-            // TODO: use shortcut provided in vulkano 0.6
-            let atch_usage = ImageUsage {
-                transient_attachment: true,
-                input_attachment: true,
-                ..ImageUsage::none()
-            };
-
-            // Note that we create "transient" images here. This means that the content of the
-            // image is only defined when within a render pass. In other words you can draw to
-            // them in a subpass then read them in another subpass, but as soon as you leave the
-            // render pass their content becomes undefined.
-            self.diffuse_buffer = ImageView::new(
-                AttachmentImage::multisampled_with_usage(
-                    self.gfx_queue.device().clone(),
-                    img_dims,
-                    self.sample_count,
-                    Format::R8G8B8A8Unorm,
-                    atch_usage,
-                )
-                    .unwrap(),
-            )
-                .unwrap();
-            self.normals_buffer = ImageView::new(
-                AttachmentImage::multisampled_with_usage(
-                    self.gfx_queue.device().clone(),
-                    img_dims,
-                    self.sample_count,
-                    Format::R16G16B16A16Sfloat,
-                    atch_usage,
-                )
-                    .unwrap(),
-            )
-                .unwrap();
-
-            self.positions_buffer = ImageView::new(
-                AttachmentImage::multisampled_with_usage(
-                    self.gfx_queue.device().clone(),
-                    img_dims,
-                    self.sample_count,
-                    Format::R16G16B16A16Sfloat,
-                    atch_usage,
-                ).unwrap(),
-            ).unwrap();
-
-            self.depth_buffer = ImageView::new(
-                AttachmentImage::multisampled_with_usage(
-                    self.gfx_queue.device().clone(),
-                    img_dims,
-                    self.sample_count,
-                    Format::D32Sfloat,
-                    atch_usage,
-                )
-                    .unwrap(),
-            )
-                .unwrap();
-        }
+        // let img_dims = final_image.image().dimensions().width_height();
+        // if self.diffuse_buffer.image().dimensions().width_height() != img_dims {
+        //     // TODO: use shortcut provided in vulkano 0.6
+        //     let atch_usage = ImageUsage {
+        //         transient_attachment: true,
+        //         input_attachment: true,
+        //         ..ImageUsage::none()
+        //     };
+        //
+        //     // Note that we create "transient" images here. This means that the content of the
+        //     // image is only defined when within a render pass. In other words you can draw to
+        //     // them in a subpass then read them in another subpass, but as soon as you leave the
+        //     // render pass their content becomes undefined.
+        //     self.diffuse_buffer = ImageView::new(
+        //         AttachmentImage::multisampled_with_usage(
+        //             self.gfx_queue.device().clone(),
+        //             img_dims,
+        //             self.sample_count,
+        //             Format::R8G8B8A8Unorm,
+        //             atch_usage,
+        //         )
+        //             .unwrap(),
+        //     )
+        //         .unwrap();
+        //     self.normals_buffer = ImageView::new(
+        //         AttachmentImage::multisampled_with_usage(
+        //             self.gfx_queue.device().clone(),
+        //             img_dims,
+        //             self.sample_count,
+        //             Format::R16G16B16A16Sfloat,
+        //             atch_usage,
+        //         )
+        //             .unwrap(),
+        //     )
+        //         .unwrap();
+        //
+        //     self.positions_buffer = ImageView::new(
+        //         AttachmentImage::multisampled_with_usage(
+        //             self.gfx_queue.device().clone(),
+        //             img_dims,
+        //             self.sample_count,
+        //             Format::R16G16B16A16Sfloat,
+        //             atch_usage,
+        //         ).unwrap(),
+        //     ).unwrap();
+        //
+        //     self.depth_buffer = ImageView::new(
+        //         AttachmentImage::multisampled_with_usage(
+        //             self.gfx_queue.device().clone(),
+        //             img_dims,
+        //             self.sample_count,
+        //             Format::D32Sfloat,
+        //             atch_usage,
+        //         )
+        //             .unwrap(),
+        //     )
+        //         .unwrap();
+        // }
 
         // Build the framebuffer. The image must be attached in the same order as they were defined
         // with the `ordered_passes_renderpass!` macro.
@@ -327,14 +292,14 @@ impl FrameSystem {
             Framebuffer::start(self.render_pass.clone())
                 .add(final_image.clone())
                 .unwrap()
-                .add(self.diffuse_buffer.clone())
-                .unwrap()
-                .add(self.normals_buffer.clone())
-                .unwrap()
-                .add(self.positions_buffer.clone())
-                .unwrap()
-                .add(self.depth_buffer.clone())
-                .unwrap()
+                // .add(self.diffuse_buffer.clone())
+                // .unwrap()
+                // .add(self.normals_buffer.clone())
+                // .unwrap()
+                // .add(self.positions_buffer.clone())
+                // .unwrap()
+                // .add(self.depth_buffer.clone())
+                // .unwrap()
                 .build()
                 .unwrap(),
         );
@@ -353,10 +318,10 @@ impl FrameSystem {
                 SubpassContents::SecondaryCommandBuffers,
                 vec![
                     [0.0, 0.0, 0.0, 0.0].into(),
-                    [0.0, 0.0, 0.0, 0.0].into(),
-                    [0.0, 0.0, 0.0, 0.0].into(),
-                    [0.0, 0.0, 0.0, 0.0].into(),
-                    1.0f32.into(),
+                    // [0.0, 0.0, 0.0, 0.0].into(),
+                    // [0.0, 0.0, 0.0, 0.0].into(),
+                    // [0.0, 0.0, 0.0, 0.0].into(),
+                    // 1.0f32.into(),
                 ],
             )
             .unwrap();
@@ -419,11 +384,11 @@ impl<'a> Frame<'a> {
             1 => {
                 // If we are in pass 1 then we have finished drawing the objects on the scene.
                 // Going to the next subpass.
-                self.command_buffer_builder
-                    .as_mut()
-                    .unwrap()
-                    .next_subpass(SubpassContents::SecondaryCommandBuffers)
-                    .unwrap();
+                // self.command_buffer_builder
+                //     .as_mut()
+                //     .unwrap()
+                //     .next_subpass(SubpassContents::SecondaryCommandBuffers)
+                //     .unwrap();
 
                 // And returning an object that will allow the user to apply lighting to the scene.
                 Some(Pass::Lighting(LightingPass { frame: self }))

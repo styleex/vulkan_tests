@@ -65,9 +65,13 @@ impl Framebuffer {
         }
     }
 
+    pub fn view(&self, idx: usize) -> Arc<ImageView<Arc<AttachmentImage>>> {
+        self.views.get(idx).unwrap().clone()
+    }
+
     pub fn add_view(&mut self, format: Format, samples_count: SampleCount) {
         let view = ImageView::new(
-            AttachmentImage::multisampled_input_attachment(
+            AttachmentImage::sampled_multisampled_input_attachment(
                 self.gfx_queue.device().clone(),
                 [self.width, self.height],
                 samples_count,
@@ -185,7 +189,6 @@ impl Framebuffer {
                 render_pass_desc)
                 .unwrap()
         );
-
 
         // Framebuffer<Box<dyn render_pass::AttachmentsList + Send + Sync>>
         let mut framebuffer_builder = render_pass::Framebuffer::start(render_pass.clone()).boxed();

@@ -7,6 +7,7 @@ use vulkano::device::{Device, DeviceExtensions};
 use vulkano::image::{ImageAccess, ImageUsage};
 use vulkano::image::view::ImageView;
 use vulkano::instance::{Instance, PhysicalDevice};
+use vulkano::render_pass::FramebufferAbstract;
 use vulkano::swapchain::{AcquireError, Swapchain, SwapchainCreationError};
 use vulkano::sync::{FlushError, GpuFuture};
 use vulkano::sync;
@@ -20,7 +21,6 @@ use crate::camera::Camera;
 use crate::deferred2::render;
 use crate::terrain_game::Map;
 use crate::terrain_render_system::{RenderPipeline, TerrainRenderSystem};
-use vulkano::render_pass::FramebufferAbstract;
 
 mod terrain;
 mod camera;
@@ -126,7 +126,7 @@ fn main() {
 
 
     let mut terrain_rs = TerrainRenderSystem::new(queue.clone(),
-                                                  frame_system.deferred_subpass(),
+                                                  dd2.subpass(),
                                                   picker.subpass());
 
     let world = Matrix4::identity();
@@ -234,41 +234,44 @@ fn main() {
                     cursor_pos_changed = false;
                 }
 
-                // render(queue.clone(), &dd2, |cmd_buf| {
-                //     let dimensions: [u32; 2] = surface.window().inner_size().into();
-                //
-                //     let cb = terrain_rs
-                //         .render(
-                //             RenderPipeline::Diffuse,
-                //             &terrain_map,
-                //             dimensions,
-                //             world,
-                //             cam.view_matrix(),
-                //             cam.proj_matrix(),
-                //         );
-                //     cmd_buf.execute_commands(cb).unwrap();
-                // });
+                render(queue.clone(), &dd2, |cmd_buf| {
+                    let dimensions: [u32; 2] = surface.window().inner_size().into();
+
+                    let cb = terrain_rs
+                        .render(
+                            RenderPipeline::Diffuse,
+                            &terrain_map,
+                            dimensions,
+                            world,
+                            cam.view_matrix(),
+                            cam.proj_matrix(),
+                        );
+                    cmd_buf.execute_commands(cb).unwrap();
+                });
+
                 let future = previous_frame_end.take().unwrap().join(acquire_future);
-                let mut frame = frame_system.frame(future, images[image_num].clone(), world * cam.view_matrix() * cam.proj_matrix());
+                let mut frame = frame_system.frame(
+                    future, images[image_num].clone(),
+                    world * cam.view_matrix() * cam.proj_matrix(), dd2.view(0));
                 let mut after_future = None;
                 while let Some(pass) = frame.next_pass() {
                     match pass {
                         deferred::Pass::Deferred(mut draw_pass) => {
-                            let cb = terrain_rs
-                                .render(
-                                    RenderPipeline::Diffuse,
-                                    &terrain_map,
-                                    draw_pass.viewport_dimensions(),
-                                    world,
-                                    cam.view_matrix(),
-                                    cam.proj_matrix(),
-                                );
-                            draw_pass.execute(cb);
+                            // let cb = terrain_rs
+                            //     .render(
+                            //         RenderPipeline::Diffuse,
+                            //         &terrain_map,
+                            //         draw_pass.viewport_dimensions(),
+                            //         world,
+                            //         cam.view_matrix(),
+                            //         cam.proj_matrix(),
+                            //     );
+                            // draw_pass.execute(cb);
                         }
                         deferred::Pass::Lighting(mut lighting) => {
                             lighting.ambient_light([0.3, 0.3, 0.3]);
                             // lighting.directional_light(Vector3::new(-0.3, -1.0, -0.3), [0.6, 0.6, 0.6]);
-                            lighting.point_light(Vector3::new(-5.0, 1.2, -5.0), [0.9, 0.9, 0.9]);
+                            // lighting.point_light(Vector3::new(-5.0, 1.2, -5.0), [0.9, 0.9, 0.9]);
                             // lighting.point_light(Vector3::new(-0.9, 0.2, -0.15), [0.0, 1.0, 0.0]);
                             // lighting.point_light(Vector3::new(0.0, 0.5, -0.05), [0.0, 0.0, 1.0]);
                         }
