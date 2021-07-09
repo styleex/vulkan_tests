@@ -2,7 +2,7 @@ use cgmath::{Matrix4, SquareMatrix, Vector3};
 use imgui;
 use imgui::{Condition, Context, FontConfig, FontGlyphRanges, FontSource, im_str, Window};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
-use vulkano::{swapchain, Version, image};
+use vulkano::{image, swapchain, Version};
 use vulkano::device::{Device, DeviceExtensions};
 use vulkano::image::{ImageAccess, ImageUsage};
 use vulkano::image::view::ImageView;
@@ -17,8 +17,10 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
 
 use crate::camera::Camera;
+use crate::deferred2::render;
 use crate::terrain_game::Map;
 use crate::terrain_render_system::{RenderPipeline, TerrainRenderSystem};
+use vulkano::render_pass::FramebufferAbstract;
 
 mod terrain;
 mod camera;
@@ -80,6 +82,8 @@ fn main() {
         deferred2::Framebuffer::new(queue.clone(), dimensions[0], dimensions[1])
     };
 
+    dd2.add_view(vulkano::format::Format::R8G8B8A8Unorm, vulkano::image::SampleCount::Sample8);
+    dd2.add_view(vulkano::format::Format::R16G16B16A16Sfloat, vulkano::image::SampleCount::Sample8);
     dd2.add_view(vulkano::format::Format::R16G16B16A16Sfloat, vulkano::image::SampleCount::Sample8);
     dd2.add_view(vulkano::format::Format::D32Sfloat, vulkano::image::SampleCount::Sample8);
     dd2.create_framebuffer();
@@ -119,6 +123,8 @@ fn main() {
     let mut frame_system = deferred::FrameSystem::new(queue.clone(), swapchain.format(), &mut imgui, image::SampleCount::Sample8);
 
     let mut terrain_map = Map::new(40, 40);
+
+
     let mut terrain_rs = TerrainRenderSystem::new(queue.clone(),
                                                   frame_system.deferred_subpass(),
                                                   picker.subpass());
@@ -228,6 +234,20 @@ fn main() {
                     cursor_pos_changed = false;
                 }
 
+                // render(queue.clone(), &dd2, |cmd_buf| {
+                //     let dimensions: [u32; 2] = surface.window().inner_size().into();
+                //
+                //     let cb = terrain_rs
+                //         .render(
+                //             RenderPipeline::Diffuse,
+                //             &terrain_map,
+                //             dimensions,
+                //             world,
+                //             cam.view_matrix(),
+                //             cam.proj_matrix(),
+                //         );
+                //     cmd_buf.execute_commands(cb).unwrap();
+                // });
                 let future = previous_frame_end.take().unwrap().join(acquire_future);
                 let mut frame = frame_system.frame(future, images[image_num].clone(), world * cam.view_matrix() * cam.proj_matrix());
                 let mut after_future = None;
@@ -248,9 +268,9 @@ fn main() {
                         deferred::Pass::Lighting(mut lighting) => {
                             lighting.ambient_light([0.3, 0.3, 0.3]);
                             // lighting.directional_light(Vector3::new(-0.3, -1.0, -0.3), [0.6, 0.6, 0.6]);
-                           lighting.point_light(Vector3::new(-5.0, 1.2, -5.0), [0.9, 0.9, 0.9]);
-                           // lighting.point_light(Vector3::new(-0.9, 0.2, -0.15), [0.0, 1.0, 0.0]);
-                           // lighting.point_light(Vector3::new(0.0, 0.5, -0.05), [0.0, 0.0, 1.0]);
+                            lighting.point_light(Vector3::new(-5.0, 1.2, -5.0), [0.9, 0.9, 0.9]);
+                            // lighting.point_light(Vector3::new(-0.9, 0.2, -0.15), [0.0, 1.0, 0.0]);
+                            // lighting.point_light(Vector3::new(0.0, 0.5, -0.05), [0.0, 0.0, 1.0]);
                         }
                         deferred::Pass::UI(mut ui_pass) => {
                             ui_pass.draw(&mut imgui, ui_pass.viewport_dimensions(), |ui| {
