@@ -1,26 +1,28 @@
+use std::sync::Arc;
+
 use cgmath::{Matrix4, SquareMatrix};
 use imgui;
-use imgui::{Condition, Context, FontConfig, FontGlyphRanges, FontSource, im_str, Window};
+use imgui::{Condition, Context, FontConfig, FontGlyphRanges, FontSource, im_str, Window as ImguiWindow};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use vulkano::{swapchain, Version};
-use vulkano::device::{Device, DeviceExtensions};
+use vulkano::device::{Device, DeviceExtensions, Queue};
 use vulkano::image::{ImageAccess, ImageUsage};
 use vulkano::image::view::ImageView;
 use vulkano::instance::{Instance, PhysicalDevice};
-use vulkano::swapchain::{AcquireError, Swapchain, SwapchainCreationError};
+use vulkano::swapchain::{AcquireError, Surface, Swapchain, SwapchainCreationError};
 use vulkano::sync::{FlushError, GpuFuture};
 use vulkano::sync;
-use vulkano_win::VkSurfaceBuild;
+use vulkano_win::{create_vk_surface, SafeBorrow, VkSurfaceBuild};
 use winit::event::{Event, MouseButton, WindowEvent};
 use winit::event::{ElementState, VirtualKeyCode};
 use winit::event_loop::{ControlFlow, EventLoop};
-use winit::window::WindowBuilder;
+use winit::platform::run_return::EventLoopExtRunReturn;
+use winit::window::{Window, WindowBuilder};
 
 use crate::camera::Camera;
 use crate::deferred::render_and_wait;
 use crate::terrain_game::Map;
 use crate::terrain_render_system::{RenderPipeline, TerrainRenderSystem};
-use std::sync::Arc;
 
 mod terrain;
 mod camera;
@@ -31,8 +33,107 @@ mod terrain_render_system;
 mod cube;
 mod mouse_picker;
 
+struct RenderApp {
+    camera: Camera,
+
+    gbuffer: deferred::Framebuffer,
+}
+
+struct App {
+    queue: Arc<Queue>,
+    swapchain: Arc<Swapchain<Window>>,
+    render_app: Option<RenderApp>,
+}
+
+impl App {
+    fn new(window: Window) -> App {
+        let required_extensions = vulkano_win::required_extensions();
+        let instance = Instance::new(None, Version::V1_1, &required_extensions, None).unwrap();
+        let physical = PhysicalDevice::enumerate(&instance).next().unwrap();
+
+        let surface = create_vk_surface(window, instance.clone()).unwrap();
+
+        let queue_family = physical.queue_families().find(|&q| {
+            // We take the first queue that supports drawing to our window.
+            q.supports_graphics() && surface.is_supported(q).unwrap_or(false)
+        }).unwrap();
+
+        let device_ext = DeviceExtensions { khr_swapchain: true, ..DeviceExtensions::none() };
+        let (device, mut queues) = Device::new(physical, physical.supported_features(), &device_ext,
+                                               [(queue_family, 0.5)].iter().cloned()).unwrap();
+        let queue = queues.next().unwrap();
+
+        let dimensions: [u32; 2] = surface.window().inner_size().into();
+        let (mut swapchain, mut swapchain_images) = {
+            let caps = surface.capabilities(physical).unwrap();
+            let composite_alpha = caps.supported_composite_alpha.iter().next().unwrap();
+            let format = caps.supported_formats[0].0;
+
+            let (swapchain, images) = Swapchain::start(device.clone(), surface.clone())
+                .num_images(caps.min_image_count)
+                .format(format)
+                .dimensions(dimensions)
+                .usage(ImageUsage::color_attachment())
+                .sharing_mode(&queue)
+                .composite_alpha(composite_alpha)
+                .build()
+                .unwrap();
+
+            let images = images
+                .into_iter()
+                .map(|image| ImageView::new(image.clone()).unwrap())
+                .collect::<Vec<_>>();
+            (swapchain, images)
+        };
+
+        let mut ret = App {
+            queue,
+            swapchain,
+            render_app: None,
+        };
+
+        ret.resize_swapchain(dimensions[0], dimensions[1]);
+
+        ret
+    }
+
+    pub fn resize_swapchain(&mut self, width: u32, height: w32) {
+
+    }
+
+    pub fn run(&mut self, mut event_loop: EventLoop<()>) {
+        event_loop.run_return(move |event, _, control_flow| {
+            *control_flow = ControlFlow::Wait;
+            let window = self.swapchain.surface().window();
+            match event {
+                Event::WindowEvent {
+                    event: WindowEvent::CloseRequested,
+                    window_id,
+                } if window_id == window.id() => *control_flow = ControlFlow::Exit,
+
+                Event::MainEventsCleared => {
+                    window.request_redraw();
+                }
+                Event::RedrawRequested(_) => {
+                    self.render();
+                }
+                _ => (),
+            }
+        });
+    }
+
+    pub fn render(&mut self) {}
+}
 
 fn main() {
+    let mut event_loop = EventLoop::new();
+    let window = WindowBuilder::new().build(&event_loop).unwrap();
+    let mut app = App::new(window);
+    app.run(event_loop);
+}
+
+
+fn mainqwe() {
     let required_extensions = vulkano_win::required_extensions();
     let instance = Instance::new(None, Version::V1_1, &required_extensions, None).unwrap();
     let physical = PhysicalDevice::enumerate(&instance).next().unwrap();
@@ -284,7 +385,7 @@ fn main() {
                     &mut imgui,
                     dimensions,
                     |ui| {
-                        Window::new(im_str!("Stats"))
+                        ImguiWindow::new(im_str!("Stats"))
                             .size([100.0, 50.0], Condition::FirstUseEver)
                             .position([0.0, 0.0], Condition::FirstUseEver)
                             .build(&ui, || {
