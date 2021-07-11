@@ -1,13 +1,12 @@
-use cgmath::{Matrix4, SquareMatrix, Vector3};
+use cgmath::{Matrix4, SquareMatrix};
 use imgui;
 use imgui::{Condition, Context, FontConfig, FontGlyphRanges, FontSource, im_str, Window};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
-use vulkano::{image, swapchain, Version};
+use vulkano::{swapchain, Version};
 use vulkano::device::{Device, DeviceExtensions};
 use vulkano::image::{ImageAccess, ImageUsage};
 use vulkano::image::view::ImageView;
 use vulkano::instance::{Instance, PhysicalDevice};
-use vulkano::render_pass::FramebufferAbstract;
 use vulkano::swapchain::{AcquireError, Swapchain, SwapchainCreationError};
 use vulkano::sync::{FlushError, GpuFuture};
 use vulkano::sync;
@@ -18,14 +17,14 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
 
 use crate::camera::Camera;
-use crate::deferred2::render;
+use crate::deferred::render_and_wait;
 use crate::terrain_game::Map;
 use crate::terrain_render_system::{RenderPipeline, TerrainRenderSystem};
+use std::sync::Arc;
 
 mod terrain;
 mod camera;
 mod deferred;
-mod deferred2;
 
 mod terrain_game;
 mod terrain_render_system;
@@ -52,7 +51,7 @@ fn main() {
     let queue = queues.next().unwrap();
 
     let mut cam = Camera::new();
-    let (mut swapchain, mut images) = {
+    let (mut swapchain, mut swapchain_images) = {
         let caps = surface.capabilities(physical).unwrap();
         let composite_alpha = caps.supported_composite_alpha.iter().next().unwrap();
         let format = caps.supported_formats[0].0;
@@ -76,17 +75,6 @@ fn main() {
             .collect::<Vec<_>>();
         (swapchain, images)
     };
-
-    let mut dd2 = {
-        let dimensions: [u32; 2] = surface.window().inner_size().into();
-        deferred2::Framebuffer::new(queue.clone(), dimensions[0], dimensions[1])
-    };
-
-    dd2.add_view(vulkano::format::Format::R8G8B8A8Unorm, vulkano::image::SampleCount::Sample8);
-    dd2.add_view(vulkano::format::Format::R16G16B16A16Sfloat, vulkano::image::SampleCount::Sample8);
-    dd2.add_view(vulkano::format::Format::R16G16B16A16Sfloat, vulkano::image::SampleCount::Sample8);
-    dd2.add_view(vulkano::format::Format::D32Sfloat, vulkano::image::SampleCount::Sample8);
-    dd2.create_framebuffer();
 
     // IMGUI
     let mut imgui = Context::create();
@@ -118,15 +106,33 @@ fn main() {
     imgui.io_mut().font_global_scale = (1.0 / hidpi_factor) as f32;
     // /IMGUI
 
-    let mut picker = mouse_picker::Picker::new(queue.clone());
+    let mut gbuffer = {
+        let dimensions: [u32; 2] = surface.window().inner_size().into();
+        deferred::Framebuffer::new(queue.clone(), dimensions[0], dimensions[1])
+    };
 
-    let mut frame_system = deferred::FrameSystem::new(queue.clone(), swapchain.format(), &mut imgui, image::SampleCount::Sample8);
+    gbuffer.add_view(vulkano::format::Format::R8G8B8A8Unorm, vulkano::image::SampleCount::Sample16);
+    gbuffer.add_view(vulkano::format::Format::R16G16B16A16Sfloat, vulkano::image::SampleCount::Sample16);
+    gbuffer.add_view(vulkano::format::Format::R16G16B16A16Sfloat, vulkano::image::SampleCount::Sample16);
+    gbuffer.add_view(vulkano::format::Format::D32Sfloat, vulkano::image::SampleCount::Sample16);
+    gbuffer.create_framebuffer();
+
+    let lighting_pass = deferred::lighting_pass::LightingPass::new(
+        queue.clone(),
+        swapchain.format(),
+        vulkano::image::SampleCount::Sample16,
+    );
+
+    let mut gui_pass = deferred::imgui_pass::GuiPass::new(&mut imgui, queue.clone(), swapchain.format());
+
+
+    let mut picker = mouse_picker::Picker::new(queue.clone());
 
     let mut terrain_map = Map::new(40, 40);
 
 
     let mut terrain_rs = TerrainRenderSystem::new(queue.clone(),
-                                                  dd2.subpass(),
+                                                  gbuffer.subpass(),
                                                   picker.subpass());
 
     let world = Matrix4::identity();
@@ -173,7 +179,6 @@ fn main() {
             }
             Event::WindowEvent { event: WindowEvent::MouseInput { state, button, .. }, .. } => {
                 if (state == ElementState::Pressed) && (button == MouseButton::Left) {
-                    println!("{:?}", entity_id);
                     terrain_map.select(entity_id);
                 }
             }
@@ -202,8 +207,20 @@ fn main() {
                         .collect::<Vec<_>>();
 
                     swapchain = new_swapchain;
-                    images = new_images;
+                    swapchain_images = new_images;
                     cam.set_viewport(dimensions[0], dimensions[1]);
+
+                    gbuffer = {
+                        let dimensions: [u32; 2] = surface.window().inner_size().into();
+                        deferred::Framebuffer::new(queue.clone(), dimensions[0], dimensions[1])
+                    };
+
+                    gbuffer.add_view(vulkano::format::Format::R8G8B8A8Unorm, vulkano::image::SampleCount::Sample16);
+                    gbuffer.add_view(vulkano::format::Format::R16G16B16A16Sfloat, vulkano::image::SampleCount::Sample16);
+                    gbuffer.add_view(vulkano::format::Format::R16G16B16A16Sfloat, vulkano::image::SampleCount::Sample16);
+                    gbuffer.add_view(vulkano::format::Format::D32Sfloat, vulkano::image::SampleCount::Sample16);
+                    gbuffer.create_framebuffer();
+
 
                     recreate_swapchain = false;
                 }
@@ -222,7 +239,7 @@ fn main() {
                 }
 
                 if cursor_pos_changed {
-                    let dims = images[image_num].image().dimensions().width_height();
+                    let dims = swapchain_images[image_num].image().dimensions().width_height();
 
                     let cb = terrain_rs.render(RenderPipeline::ObjectIdMap,
                                                &terrain_map, dims,
@@ -234,71 +251,57 @@ fn main() {
                     cursor_pos_changed = false;
                 }
 
-                render(queue.clone(), &dd2, |cmd_buf| {
-                    let dimensions: [u32; 2] = surface.window().inner_size().into();
+                let dimensions: [u32; 2] = surface.window().inner_size().into();
+                let mut after_future = render_and_wait(
+                    acquire_future,
+                    queue.clone(),
+                    &gbuffer,
+                    |cmd_buf| {
+                        let cb = terrain_rs
+                            .render(
+                                RenderPipeline::Diffuse,
+                                &terrain_map,
+                                dimensions,
+                                world,
+                                cam.view_matrix(),
+                                cam.proj_matrix(),
+                            );
+                        cmd_buf.execute_commands(cb).unwrap();
+                    });
 
-                    let cb = terrain_rs
-                        .render(
-                            RenderPipeline::Diffuse,
-                            &terrain_map,
-                            dimensions,
-                            world,
-                            cam.view_matrix(),
-                            cam.proj_matrix(),
-                        );
-                    cmd_buf.execute_commands(cb).unwrap();
-                });
+                after_future = lighting_pass.draw(
+                    after_future,
+                    queue.clone(),
+                    swapchain_images[image_num].clone(),
+                    gbuffer.view(0).clone(),
+                    [1.0, 1.0, 1.0],
+                );
 
-                let future = previous_frame_end.take().unwrap().join(acquire_future);
-                let mut frame = frame_system.frame(
-                    future, images[image_num].clone(),
-                    world * cam.view_matrix() * cam.proj_matrix(), dd2.view(0));
-                let mut after_future = None;
-                while let Some(pass) = frame.next_pass() {
-                    match pass {
-                        deferred::Pass::Deferred(mut draw_pass) => {
-                            // let cb = terrain_rs
-                            //     .render(
-                            //         RenderPipeline::Diffuse,
-                            //         &terrain_map,
-                            //         draw_pass.viewport_dimensions(),
-                            //         world,
-                            //         cam.view_matrix(),
-                            //         cam.proj_matrix(),
-                            //     );
-                            // draw_pass.execute(cb);
-                        }
-                        deferred::Pass::Lighting(mut lighting) => {
-                            lighting.ambient_light([0.3, 0.3, 0.3]);
-                            // lighting.directional_light(Vector3::new(-0.3, -1.0, -0.3), [0.6, 0.6, 0.6]);
-                            // lighting.point_light(Vector3::new(-5.0, 1.2, -5.0), [0.9, 0.9, 0.9]);
-                            // lighting.point_light(Vector3::new(-0.9, 0.2, -0.15), [0.0, 1.0, 0.0]);
-                            // lighting.point_light(Vector3::new(0.0, 0.5, -0.05), [0.0, 0.0, 1.0]);
-                        }
-                        deferred::Pass::UI(mut ui_pass) => {
-                            ui_pass.draw(&mut imgui, ui_pass.viewport_dimensions(), |ui| {
-                                Window::new(im_str!("Stats"))
-                                    .size([100.0, 50.0], Condition::FirstUseEver)
-                                    .position([0.0, 0.0], Condition::FirstUseEver)
-                                    .build(&ui, || {
-                                        ui.text(format!("FPS: ({:.1})", ui.io().framerate));
-                                    });
-
-                                platform.prepare_render(&ui, surface.window());
-                                imgui_hovered = ui.is_any_item_active();
+                after_future = gui_pass.draw(
+                    after_future,
+                    queue.clone(),
+                    swapchain_images[image_num].clone(),
+                    &mut imgui,
+                    dimensions,
+                    |ui| {
+                        Window::new(im_str!("Stats"))
+                            .size([100.0, 50.0], Condition::FirstUseEver)
+                            .position([0.0, 0.0], Condition::FirstUseEver)
+                            .build(&ui, || {
+                                ui.text(format!("FPS: ({:.1})", ui.io().framerate));
                             });
-                        }
-                        deferred::Pass::Finished(af) => {
-                            after_future = Some(af);
-                        }
-                    }
-                }
 
-                let future = after_future.unwrap()
+                        ui.show_demo_window(&mut true);
+                        platform.prepare_render(&ui, surface.window());
+                        imgui_hovered = ui.is_any_item_active();
+                    },
+                );
+
+                let frame_future = after_future
                     .then_swapchain_present(queue.clone(), swapchain.clone(), image_num)
                     .then_signal_fence_and_flush();
 
-                match future {
+                match frame_future {
                     Ok(future) => {
                         future.wait(None).unwrap();
                         previous_frame_end = Some(Box::new(future) as Box<_>);

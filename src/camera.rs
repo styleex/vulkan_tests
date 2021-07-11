@@ -36,7 +36,6 @@ impl Camera {
     }
 
     pub fn set_viewport(&mut self, w: u32, h: u32) {
-        println!("{:?} {:?}", w, h);
         self.viewport = [w, h];
         self.proj = cgmath::perspective(
             Rad::from(Deg(45.0)),
@@ -75,7 +74,7 @@ impl Camera {
             }
 
             &WindowEvent::MouseInput { state, button, .. } => {
-                self.mouse_pressed = (state == ElementState::Pressed) && (button == MouseButton::Left);
+                self.mouse_pressed = (state == ElementState::Pressed) && (button == MouseButton::Right);
             }
             &WindowEvent::CursorMoved { position, .. } => {
                 if !self.mouse_pressed {

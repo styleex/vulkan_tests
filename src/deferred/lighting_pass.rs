@@ -1,45 +1,52 @@
-// Copyright (c) 2017 The vulkano developers
-// Licensed under the Apache License, Version 2.0
-// <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT
-// license <LICENSE-MIT or http://opensource.org/licenses/MIT>,
-// at your option. All files in the project carrying such
-// notice may not be copied, modified, or distributed except
-// according to those terms.
-
 use std::sync::Arc;
 
-use vulkano::{image, sampler};
+use vulkano::{image, render_pass, sampler};
 use vulkano::buffer::BufferUsage;
 use vulkano::buffer::CpuAccessibleBuffer;
-use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, SubpassContents};
 use vulkano::command_buffer::DynamicState;
-use vulkano::command_buffer::SecondaryAutoCommandBuffer;
 use vulkano::descriptor::descriptor_set::PersistentDescriptorSet;
 use vulkano::device::Queue;
 use vulkano::image::ImageViewAbstract;
-use vulkano::pipeline::blend::AttachmentBlend;
-use vulkano::pipeline::blend::BlendFactor;
-use vulkano::pipeline::blend::BlendOp;
 use vulkano::pipeline::GraphicsPipeline;
 use vulkano::pipeline::GraphicsPipelineAbstract;
 use vulkano::pipeline::viewport::Viewport;
-use vulkano::render_pass::Subpass;
+use vulkano::render_pass::{RenderPass, Subpass};
+use vulkano::sync::GpuFuture;
 
-/// Allows applying an ambient lighting to a scene.
-pub struct AmbientLightingSystem {
+
+pub struct LightingPass {
     gfx_queue: Arc<Queue>,
     vertex_buffer: Arc<CpuAccessibleBuffer<[Vertex]>>,
     pipeline: Arc<dyn GraphicsPipelineAbstract + Send + Sync>,
     sampler: Arc<sampler::Sampler>,
+
+    render_pass: Arc<RenderPass>,
 }
 
-impl AmbientLightingSystem {
-    /// Initializes the ambient lighting system.
-    pub fn new(gfx_queue: Arc<Queue>, subpass: Subpass, samples_count: image::SampleCount) -> AmbientLightingSystem
+impl LightingPass {
+    pub fn new(gfx_queue: Arc<Queue>, output_format: vulkano::format::Format, output_samples_count: image::SampleCount) -> LightingPass
     {
-        // TODO: vulkano doesn't allow us to draw without a vertex buffer, otherwise we could
-        //       hard-code these values in the shader
+        let render_pass = Arc::new(
+            vulkano::single_pass_renderpass!(
+                gfx_queue.device().clone(),
+                attachments: {
+                    // The image that will contain the final rendering (in this example the swapchain
+                    // image, but it could be another image).
+                    final_color: {
+                        load: Clear,
+                        store: Store,
+                        format: output_format,
+                        samples: 1,
+                    }
+                },
+                pass: {
+                        color: [final_color],
+                        depth_stencil: {}
+                    }
+            ).unwrap(),
+        );
+
         let vertex_buffer = {
             CpuAccessibleBuffer::from_iter(gfx_queue.device().clone(), BufferUsage::all(), false, [
                 Vertex { position: [-1.0, -1.0] },
@@ -55,10 +62,8 @@ impl AmbientLightingSystem {
                 .expect("failed to create shader module");
 
             let spec_consts = fs::SpecializationConstants {
-                NUM_SAMPLES: samples_count as i32,
+                NUM_SAMPLES: output_samples_count as i32,
             };
-
-            println!("{:?}", samples_count as i32);
 
             Arc::new(GraphicsPipeline::start()
                 .vertex_input_single_buffer::<Vertex>()
@@ -66,56 +71,55 @@ impl AmbientLightingSystem {
                 .triangle_list()
                 .viewports_dynamic_scissors_irrelevant(1)
                 .fragment_shader(fs.main_entry_point(), spec_consts)
-                .blend_collective(AttachmentBlend {
-                    enabled: true,
-                    color_op: BlendOp::Add,
-                    color_source: BlendFactor::One,
-                    color_destination: BlendFactor::One,
-                    alpha_op: BlendOp::Max,
-                    alpha_source: BlendFactor::One,
-                    alpha_destination: BlendFactor::One,
-                    mask_red: true,
-                    mask_green: true,
-                    mask_blue: true,
-                    mask_alpha: true,
-                })
-                .render_pass(subpass)
+                .blend_alpha_blending()
+                .render_pass(Subpass::from(render_pass.clone(), 0).unwrap())
                 .build(gfx_queue.device().clone())
                 .unwrap()) as Arc<_>
         };
 
-        let sampler = sampler::Sampler::new(gfx_queue.device().clone(), sampler::Filter::Linear,
-                                            sampler::Filter::Linear,
-                                            sampler::MipmapMode::Nearest,
-                                            sampler::SamplerAddressMode::Repeat,
-                                            sampler::SamplerAddressMode::Repeat,
-                                            sampler::SamplerAddressMode::Repeat, 1.0, 1.0,
-                                            0.0, 100.0).unwrap();
-        ;
-        AmbientLightingSystem {
-            gfx_queue: gfx_queue,
-            vertex_buffer: vertex_buffer,
-            pipeline: pipeline,
+        let sampler = sampler::Sampler::new(
+            gfx_queue.device().clone(),
+            sampler::Filter::Linear,
+            sampler::Filter::Linear,
+            sampler::MipmapMode::Nearest,
+            sampler::SamplerAddressMode::Repeat,
+            sampler::SamplerAddressMode::Repeat,
+            sampler::SamplerAddressMode::Repeat,
+            1.0,
+            1.0,
+            0.0,
+            100.0,
+        ).unwrap();
+
+        LightingPass {
+            gfx_queue,
+            vertex_buffer,
+            pipeline,
             sampler,
+            render_pass,
         }
     }
 
-    /// Builds a secondary command buffer that applies ambient lighting.
-    ///
-    /// This secondary command buffer will read `color_input`, multiply it with `ambient_color`
-    /// and write the output to the current framebuffer with additive blending (in other words
-    /// the value will be added to the existing value in the framebuffer, and not replace the
-    /// existing value).
-    ///
-    /// - `viewport_dimensions` contains the dimensions of the current framebuffer.
-    /// - `color_input` is an image containing the albedo of each object of the scene. It is the
-    ///   result of the deferred pass.
-    /// - `ambient_color` is the color to apply.
-    ///
-    pub fn draw<C>(&self, viewport_dimensions: [u32; 2], color_input: C,
-                   ambient_color: [f32; 3]) -> SecondaryAutoCommandBuffer
-        where C: ImageViewAbstract + Send + Sync + 'static,
+    pub fn draw<F, I, C>(&self,
+                         before_future: F,
+                         gfx_queue: Arc<Queue>,
+                         target_image: Arc<I>,
+                         color_input: C,
+                         ambient_color: [f32; 3],
+    ) -> Box<dyn GpuFuture>
+        where
+            F: GpuFuture + 'static,
+            C: ImageViewAbstract + Send + Sync + 'static,
+            I: ImageViewAbstract + Send + Sync + 'static
     {
+        let framebuffer = Arc::new(
+            render_pass::Framebuffer::start(self.render_pass.clone())
+                .add(target_image.clone())
+                .unwrap()
+                .build()
+                .unwrap()
+        );
+
         let push_constants = fs::ty::PushConstants {
             color: [ambient_color[0], ambient_color[1], ambient_color[2], 1.0],
         };
@@ -127,6 +131,7 @@ impl AmbientLightingSystem {
             .build()
             .unwrap();
 
+        let viewport_dimensions = target_image.image().dimensions().width_height();
         let dynamic_state = DynamicState {
             viewports: Some(vec![Viewport {
                 origin: [0.0, 0.0],
@@ -137,14 +142,22 @@ impl AmbientLightingSystem {
             ..DynamicState::none()
         };
 
-        let mut builder = AutoCommandBufferBuilder::secondary_graphics(
+        let mut command_buffer_builder = AutoCommandBufferBuilder::primary(
             self.gfx_queue.device().clone(),
             self.gfx_queue.family(),
-            CommandBufferUsage::MultipleSubmit,
-            self.pipeline.subpass().clone(),
+            CommandBufferUsage::OneTimeSubmit,
         ).unwrap();
 
-        builder
+        command_buffer_builder
+            .begin_render_pass(
+                framebuffer,
+                SubpassContents::Inline,
+                vec![
+                    [0.0, 0.0, 0.0, 0.0].into(),
+                ],
+            ).unwrap();
+
+        command_buffer_builder
             .draw(
                 self.pipeline.clone(),
                 &dynamic_state,
@@ -155,7 +168,11 @@ impl AmbientLightingSystem {
             )
             .unwrap();
 
-        builder.build().unwrap()
+        command_buffer_builder.end_render_pass().unwrap();
+
+        let cmd_buf = command_buffer_builder.build().unwrap();
+
+        Box::new(before_future.then_execute(gfx_queue.clone(), cmd_buf).unwrap())
     }
 }
 

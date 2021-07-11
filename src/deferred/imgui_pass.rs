@@ -1,19 +1,20 @@
 use std::sync::Arc;
 
 use imgui::{DrawCmd, DrawCmdParams, DrawVert, ImString, TextureId, Textures};
+use imgui::internal::RawWrapper;
 use vulkano::buffer::{BufferAccess, BufferUsage, CpuBufferPool};
-use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, DynamicState, SecondaryAutoCommandBuffer};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, DynamicState, SubpassContents};
 use vulkano::descriptor::descriptor_set::PersistentDescriptorSet;
 use vulkano::device::{Device, Queue};
-use vulkano::format::Format;
+use vulkano::format::{Format, ClearValue};
 use vulkano::image::{ImageDimensions, ImageViewAbstract, ImmutableImage};
 use vulkano::image::view::ImageView;
 use vulkano::pipeline::{GraphicsPipeline, GraphicsPipelineAbstract};
 use vulkano::pipeline::viewport::{Scissor, Viewport};
+use vulkano::render_pass;
 use vulkano::render_pass::Subpass;
 use vulkano::sampler::Sampler;
 use vulkano::sync::GpuFuture;
-use imgui::internal::RawWrapper;
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -27,20 +28,42 @@ pub type Texture = (Arc<dyn ImageViewAbstract + Send + Sync>, Arc<Sampler>);
 
 #[allow(dead_code)]
 /// Allows applying a directional light source to a scene.
-pub struct ImguiRenderSystem {
+pub struct GuiPass {
     gfx_queue: Arc<Queue>,
     pipeline: Arc<dyn GraphicsPipelineAbstract + Send + Sync>,
     vrt_buffer_pool: CpuBufferPool<Vertex>,
     idx_buffer_pool: CpuBufferPool<u16>,
     font_texture: Texture,
     textures: Textures<Texture>,
+
+    render_pass: Arc<render_pass::RenderPass>,
 }
 
 #[allow(dead_code)]
-impl ImguiRenderSystem {
+impl GuiPass {
     /// Initializes the directional lighting system.
-    pub fn new(ctx: &mut imgui::Context, gfx_queue: Arc<Queue>, subpass: Subpass) -> ImguiRenderSystem
+    pub fn new(ctx: &mut imgui::Context, gfx_queue: Arc<Queue>, output_format: vulkano::format::Format) -> GuiPass
     {
+        let render_pass = Arc::new(
+            vulkano::single_pass_renderpass!(
+                gfx_queue.device().clone(),
+                attachments: {
+                    // The image that will contain the final rendering (in this example the swapchain
+                    // image, but it could be another image).
+                    final_color: {
+                        load: Load,
+                        store: Store,
+                        format: output_format,
+                        samples: 1,
+                    }
+                },
+                pass: {
+                        color: [final_color],
+                        depth_stencil: {}
+                    }
+            ).unwrap(),
+        );
+
         let pipeline = {
             let vs = vs::Shader::load(gfx_queue.device().clone())
                 .expect("failed to create shader module");
@@ -55,7 +78,7 @@ impl ImguiRenderSystem {
                     .viewports_scissors_dynamic(1)
                     .fragment_shader(fs.main_entry_point(), ())
                     .blend_alpha_blending()
-                    .render_pass(subpass)
+                    .render_pass(Subpass::from(render_pass.clone(), 0).unwrap())
                     .build(gfx_queue.device().clone()).unwrap()
             )
         };
@@ -69,29 +92,59 @@ impl ImguiRenderSystem {
         let font_texture = Self::upload_font_texture(ctx.fonts(), device.clone(), gfx_queue.clone()).unwrap();
         ctx.set_renderer_name(Some(ImString::from(format!("imgui-vulkano-renderer {}", env!("CARGO_PKG_VERSION")))));
 
-        ImguiRenderSystem {
+        GuiPass {
             gfx_queue,
             pipeline,
             textures,
             font_texture,
             vrt_buffer_pool,
             idx_buffer_pool,
+            render_pass,
         }
     }
 
-    pub fn draw<F: FnMut(&mut imgui::Ui)>(&mut self, ctx: &mut imgui::Context, viewport_dimensions: [u32; 2], mut f: F) -> SecondaryAutoCommandBuffer {
+    pub fn draw<F, DF, I>(
+        &mut self,
+        before_future: F,
+        gfx_queue: Arc<Queue>,
+        target_image: Arc<I>,
+        ctx: &mut imgui::Context,
+        viewport_dimensions: [u32; 2],
+        mut draw_func: DF,
+    ) -> Box<dyn GpuFuture>
+        where
+            F: GpuFuture + 'static,
+            DF: FnMut(&mut imgui::Ui),
+            I: ImageViewAbstract + Send + Sync + 'static
+    {
         let mut ui = ctx.frame();
-        f(&mut ui);
+        draw_func(&mut ui);
 
         let draw_data = ui.render();
 
-        let mut builder = AutoCommandBufferBuilder::secondary_graphics(
+        let framebuffer = Arc::new(
+            render_pass::Framebuffer::start(self.render_pass.clone())
+                .add(target_image.clone())
+                .unwrap()
+                .build()
+                .unwrap()
+        );
+
+        let mut builder = AutoCommandBufferBuilder::primary(
             self.gfx_queue.device().clone(),
             self.gfx_queue.family(),
-            CommandBufferUsage::MultipleSubmit,
-            self.pipeline.subpass().clone(),
+            CommandBufferUsage::OneTimeSubmit,
         )
             .unwrap();
+
+        builder
+            .begin_render_pass(
+                framebuffer,
+                SubpassContents::Inline,
+                vec![
+                    ClearValue::None,
+                ],
+            ).unwrap();
 
         for draw_list in draw_data.draw_lists() {
             let vertex_buffer = Arc::new(self.vrt_buffer_pool.chunk(draw_list.vtx_buffer().iter().map(|&v| Vertex::from(v))).unwrap());
@@ -206,7 +259,10 @@ impl ImguiRenderSystem {
             }
         }
 
-        builder.build().unwrap()
+        builder.end_render_pass().unwrap();
+
+        let cmd_buf = builder.build().unwrap();
+        Box::new(before_future.then_execute(gfx_queue.clone(), cmd_buf).unwrap())
     }
 
     fn upload_font_texture(
