@@ -15,7 +15,7 @@ use vulkano::device::DeviceExtensions;
 
 
 pub trait App {
-    fn resize_swapchain(&mut self, format: format::Format, dimensions: [u32; 2]);
+    fn resize_swapchain(&mut self, dimensions: [u32; 2]);
     fn render<F, I>(&mut self, before_future: F, dimensions: [u32; 2], image: Arc<I>) -> Box<dyn GpuFuture>
         where F: GpuFuture + 'static,
               I: ImageViewAbstract + Send + Sync + 'static;
@@ -24,7 +24,7 @@ pub trait App {
 }
 
 pub fn run_app<F, A>(create_app: F)
-    where F: Fn(Arc<Queue>) -> A,
+    where F: Fn(Arc<Queue>, format::Format) -> A,
           A: App + 'static,
 {
     let required_extensions = vulkano_win::required_extensions();
@@ -66,8 +66,8 @@ pub fn run_app<F, A>(create_app: F)
             .collect::<Vec<_>>();
         (swapchain, images)
     };
-    let mut app = create_app(queue.clone());
-    app.resize_swapchain(swapchain.format(), surface.window().inner_size().into());
+    let mut app = create_app(queue.clone(), swapchain.format());
+    app.resize_swapchain(surface.window().inner_size().into());
 
     let mut recreate_swapchain = false;
     let mut previous_frame_end = Some(Box::new(sync::now(device.clone())) as Box<dyn GpuFuture>);
@@ -111,10 +111,11 @@ pub fn run_app<F, A>(create_app: F)
                         .map(|image| ImageView::new(image.clone()).unwrap())
                         .collect::<Vec<_>>();
 
+                    assert_eq!(swapchain.format(), new_swapchain.format());
                     swapchain = new_swapchain;
                     swapchain_images = new_images;
 
-                    app.resize_swapchain(swapchain.format(), dimensions);
+                    app.resize_swapchain(dimensions);
                     recreate_swapchain = false;
                 }
 

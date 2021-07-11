@@ -7,7 +7,7 @@ use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use vulkano::{format, swapchain, Version};
 use vulkano::device::{Device, DeviceExtensions, Queue};
 use vulkano::format::Format;
-use vulkano::image::{ImageAccess, ImageUsage, ImageViewAbstract};
+use vulkano::image::{ImageAccess, ImageUsage, ImageViewAbstract, SampleCount};
 use vulkano::image::view::ImageView;
 use vulkano::instance::{Instance, PhysicalDevice};
 use vulkano::swapchain::{AcquireError, Surface, Swapchain, SwapchainCreationError};
@@ -21,7 +21,7 @@ use winit::platform::run_return::EventLoopExtRunReturn;
 use winit::window::{Window, WindowBuilder};
 
 use crate::camera::Camera;
-use crate::deferred::{Framebuffer, lighting_pass, render_and_wait};
+use crate::deferred::{Framebuffer, lighting_pass, render_and_wait, RenderTargetDesc};
 use crate::terrain_game::Map;
 use crate::terrain_render_system::{RenderPipeline, TerrainRenderSystem};
 
@@ -39,6 +39,7 @@ use crate::app::{App, run_app};
 
 
 struct MyApp {
+    swapchain_format: format::Format,
     queue: Arc<Queue>,
 
     camera: Camera,
@@ -52,15 +53,15 @@ struct MyApp {
 }
 
 impl MyApp {
-    fn new(queue: Arc<Queue>) -> Self {
+    fn new(queue: Arc<Queue>, swapchain_format: format::Format) -> Self {
         let mouse_picker = mouse_picker::Picker::new(queue.clone());
 
-        let mut gbuffer = deferred::Framebuffer::new(queue.clone(), 800, 600);
-        gbuffer.add_view(vulkano::format::Format::R8G8B8A8Unorm, vulkano::image::SampleCount::Sample4);
-        gbuffer.add_view(vulkano::format::Format::R16G16B16A16Sfloat, vulkano::image::SampleCount::Sample4);
-        gbuffer.add_view(vulkano::format::Format::R16G16B16A16Sfloat, vulkano::image::SampleCount::Sample4);
-        gbuffer.add_view(vulkano::format::Format::D32Sfloat, vulkano::image::SampleCount::Sample4);
-        gbuffer.create_framebuffer();
+        let gbuffer = deferred::Framebuffer::new(queue.clone(), vec!(
+            RenderTargetDesc { format: Format::R8G8B8A8Unorm, samples_count: SampleCount::Sample4 },
+            RenderTargetDesc { format: Format::R16G16B16A16Sfloat, samples_count: SampleCount::Sample4 },
+            RenderTargetDesc { format: Format::R16G16B16A16Sfloat, samples_count: SampleCount::Sample4 },
+            RenderTargetDesc { format: Format::D32Sfloat, samples_count: SampleCount::Sample4 },
+        ));
 
         let terrain = TerrainRenderSystem::new(
             queue.clone(),
@@ -69,6 +70,12 @@ impl MyApp {
         );
 
         let terrain_map = Map::new(40, 40);
+
+        let lighting_pass = Some(deferred::lighting_pass::LightingPass::new(
+            queue.clone(),
+            swapchain_format,
+            vulkano::image::SampleCount::Sample4,
+        ));
 
         MyApp {
             camera: Camera::new(),
@@ -80,31 +87,16 @@ impl MyApp {
             terrain,
             terrain_map,
 
-            lighting_pass: None,
+            lighting_pass,
+            swapchain_format,
         }
     }
 }
 
 impl App for MyApp {
-    fn resize_swapchain(&mut self, format: Format, dimensions: [u32; 2]) {
+    fn resize_swapchain(&mut self, dimensions: [u32; 2]) {
         self.camera.set_viewport(dimensions[0], dimensions[1]);
-
-        let mut gbuffer = deferred::Framebuffer::new(
-            self.queue.clone(), dimensions[0], dimensions[1]);
-
-        gbuffer.add_view(vulkano::format::Format::R8G8B8A8Unorm, vulkano::image::SampleCount::Sample4);
-        gbuffer.add_view(vulkano::format::Format::R16G16B16A16Sfloat, vulkano::image::SampleCount::Sample4);
-        gbuffer.add_view(vulkano::format::Format::R16G16B16A16Sfloat, vulkano::image::SampleCount::Sample4);
-        gbuffer.add_view(vulkano::format::Format::D32Sfloat, vulkano::image::SampleCount::Sample4);
-        gbuffer.create_framebuffer();
-
-        self.gbuffer = gbuffer;
-
-        self.lighting_pass = Some(deferred::lighting_pass::LightingPass::new(
-            self.queue.clone(),
-            format,
-            vulkano::image::SampleCount::Sample4,
-        ));
+        self.gbuffer.resize_swapchain(dimensions);
     }
 
     fn render<F, I>(&mut self, before_future: F, dimensions: [u32; 2], image: Arc<I>) -> Box<dyn GpuFuture>
@@ -119,7 +111,6 @@ impl App for MyApp {
             self.camera.view_matrix(),
             self.camera.proj_matrix(),
         );
-
 
         let mut after_future = render_and_wait(
             before_future,
@@ -144,8 +135,8 @@ impl App for MyApp {
 }
 
 fn main() {
-    app::run_app(|queue| -> MyApp {
-        MyApp::new(queue)
+    app::run_app(|queue, swapchain_format| -> MyApp {
+        MyApp::new(queue, swapchain_format)
     });
 }
 

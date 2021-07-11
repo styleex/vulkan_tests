@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use vulkano::{device, render_pass, sync};
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer, SubpassContents};
-use vulkano::device::Queue;
+use vulkano::device::{Queue, Device};
 use vulkano::format::{Format, FormatTy};
 use vulkano::image::{AttachmentImage, ImageLayout, ImageViewAbstract, SampleCount};
 use vulkano::image::view::ImageView;
@@ -44,27 +44,32 @@ unsafe impl FramebufferAbstract for FbWrapper {
     }
 }
 
+#[derive(Clone)]
+pub struct RenderTargetDesc {
+    pub format: Format,
+    pub samples_count: SampleCount,
+}
+
 
 #[allow(dead_code)]
 pub struct Framebuffer {
     gfx_queue: Arc<Queue>,
-    width: u32,
-    height: u32,
+    descriptions: Vec<RenderTargetDesc>,
+
     views: Vec<Arc<ImageView<Arc<AttachmentImage>>>>,
     framebuffer: Option<Arc<dyn render_pass::FramebufferAbstract + Sync + Send>>,
-    render_pass: Option<Arc<render_pass::RenderPass>>,
+    render_pass: Arc<render_pass::RenderPass>,
 }
 
 #[allow(dead_code)]
 impl Framebuffer {
-    pub fn new(gfx_queue: Arc<Queue>, width: u32, height: u32) -> Framebuffer {
+    pub fn new(gfx_queue: Arc<Queue>, targets: Vec<RenderTargetDesc>) -> Framebuffer {
         Framebuffer {
+            gfx_queue: gfx_queue.clone(),
+            descriptions: targets.clone(),
             views: vec![],
             framebuffer: None,
-            width,
-            height,
-            gfx_queue: gfx_queue.clone(),
-            render_pass: None,
+            render_pass: Self::_create_render_pass(gfx_queue.device().clone(), targets),
         }
     }
 
@@ -72,28 +77,18 @@ impl Framebuffer {
         self.views.get(idx).unwrap().clone()
     }
 
-    pub fn add_view(&mut self, format: Format, samples_count: SampleCount) {
-        let view = ImageView::new(
-            AttachmentImage::sampled_multisampled_input_attachment(
-                self.gfx_queue.device().clone(),
-                [self.width, self.height],
-                samples_count,
-                format,
-            ).unwrap()
-        ).unwrap();
-
-        self.views.push(view);
-    }
-
-    pub fn create_framebuffer(&mut self) {
+    fn _create_render_pass(
+        device: Arc<Device>,
+        descriptions: Vec<RenderTargetDesc>,
+    ) -> Arc<render_pass::RenderPass>
+    {
         let mut attachments: Vec<AttachmentDesc> = vec![];
 
         let mut color_attachments_refs: Vec<(usize, ImageLayout)> = vec![];
         let mut depth_attachment_ref: Option<(usize, ImageLayout)> = None;
 
-
-        for (idx, view) in self.views.iter().enumerate() {
-            let is_depth = match view.format().ty() {
+        for (idx, view) in descriptions.iter().enumerate() {
+            let is_depth = match view.format.ty() {
                 FormatTy::Depth => true,
                 FormatTy::DepthStencil => true,
                 FormatTy::Stencil => true,
@@ -108,8 +103,8 @@ impl Framebuffer {
             };
 
             attachments.push(AttachmentDesc {
-                format: view.format(),
-                samples: view.image().samples(),
+                format: view.format,
+                samples: view.samples_count,
                 load: LoadOp::Clear,
                 store: StoreOp::Store,
                 stencil_load: LoadOp::DontCare,
@@ -186,32 +181,41 @@ impl Framebuffer {
             subpass_dependencies,
         );
 
-        let render_pass = Arc::new(
+        Arc::new(
             render_pass::RenderPass::new(
-                self.gfx_queue.device().clone(),
+                device,
                 render_pass_desc)
                 .unwrap()
-        );
+        )
+    }
 
-        // Framebuffer<Box<dyn render_pass::AttachmentsList + Send + Sync>>
-        let mut framebuffer_builder = render_pass::Framebuffer::start(render_pass.clone()).boxed();
+    pub fn resize_swapchain(&mut self, dimensions: [u32; 2]) {
+        self.views = self.descriptions.iter().map(|desc| {
+            ImageView::new(
+                AttachmentImage::sampled_multisampled_input_attachment(
+                    self.gfx_queue.device().clone(),
+                    dimensions,
+                    desc.samples_count,
+                    desc.format,
+                ).unwrap()
+            ).unwrap()
+        }).collect();
+
+        let mut framebuffer_builder = render_pass::Framebuffer::start(
+            self.render_pass.clone()
+        ).boxed();
 
         for view in self.views.iter() {
             framebuffer_builder = framebuffer_builder.add(view.clone()).unwrap().boxed();
         }
 
-        let fb = framebuffer_builder.build().unwrap();
-
-        // render_pass::Framebuffer::(fb);
         self.framebuffer = Some(
             Arc::new(
                 FbWrapper {
-                    inner: fb
+                    inner: framebuffer_builder.build().unwrap()
                 }
             )
         );
-
-        self.render_pass = Some(render_pass);
     }
 
     pub fn framebuffer(&self) -> Arc<dyn render_pass::FramebufferAbstract + Sync + Send> {
@@ -219,7 +223,7 @@ impl Framebuffer {
     }
 
     pub fn subpass(&self) -> render_pass::Subpass {
-        render_pass::Subpass::from(self.render_pass.clone().unwrap(), 0).unwrap()
+        render_pass::Subpass::from(self.render_pass.clone(), 0).unwrap()
     }
 }
 

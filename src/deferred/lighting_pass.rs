@@ -25,7 +25,7 @@ pub struct LightingPass {
 }
 
 impl LightingPass {
-    pub fn new(gfx_queue: Arc<Queue>, output_format: vulkano::format::Format, output_samples_count: image::SampleCount) -> LightingPass
+    pub fn new(gfx_queue: Arc<Queue>, output_format: vulkano::format::Format, input_samples: image::SampleCount) -> LightingPass
     {
         let render_pass = Arc::new(
             vulkano::single_pass_renderpass!(
@@ -62,7 +62,7 @@ impl LightingPass {
                 .expect("failed to create shader module");
 
             let spec_consts = fs::SpecializationConstants {
-                NUM_SAMPLES: output_samples_count as i32,
+                NUM_SAMPLES: input_samples as i32,
             };
 
             Arc::new(GraphicsPipeline::start()
