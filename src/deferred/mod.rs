@@ -231,7 +231,7 @@ pub fn render_and_wait<F, Fn>(
 ) -> Box<dyn GpuFuture>
     where
         F: GpuFuture + 'static,
-        Fn: FnMut(&mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>)
+        Fn: FnOnce(&mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>)
 {
     // Start the command buffer builder that will be filled throughout the frame handling.
     let mut command_buffer_builder = AutoCommandBufferBuilder::primary(
