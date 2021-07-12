@@ -52,10 +52,6 @@ impl Camera {
         self.proj
     }
 
-    pub fn clear_mouse(&mut self) {
-        self.mouse_pressed = false;
-    }
-
     pub fn handle_event(&mut self, event: &WindowEvent) {
         match event {
             &WindowEvent::KeyboardInput { input, .. } => {

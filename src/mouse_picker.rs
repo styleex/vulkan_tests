@@ -4,10 +4,11 @@ use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer};
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, PrimaryCommandBuffer, SecondaryCommandBuffer, SubpassContents};
 use vulkano::device::Queue;
 use vulkano::format::Format;
-use vulkano::image::{AttachmentImage, ImageAccess, ImageLayout, ImageUsage};
+use vulkano::image::{AttachmentImage, ImageAccess, ImageUsage};
 use vulkano::image::view::ImageView;
 use vulkano::render_pass::{Framebuffer, FramebufferAbstract, RenderPass, Subpass};
 use vulkano::sync::GpuFuture;
+
 
 pub struct Picker {
     // Queue to use to render everything.
@@ -25,6 +26,7 @@ pub struct Picker {
 
     depth_buffer: Arc<ImageView<Arc<AttachmentImage>>>,
 }
+
 
 fn get_entity_id(r: u8, g: u8, b: u8, a: u8) -> Option<u32> {
     if a == 0 {
@@ -122,7 +124,7 @@ impl Picker {
     pub fn subpass(&self) -> Subpass {
         Subpass::from(self.render_pass.clone(), 0).unwrap()
     }
-    pub fn draw<C>(&mut self, img_dims: [u32; 2], cmds: Vec<C>, x: u32, y: u32) -> Option<u32>
+    pub fn draw<C>(&mut self, img_dims: [u32; 2], cmds: Vec<C>, mouse_pos: [u32; 2]) -> Option<u32>
         where C: SecondaryCommandBuffer + Send + Sync + 'static
     {
         // Recreate framebuffer
@@ -178,7 +180,7 @@ impl Picker {
         }
 
         let dims = self.object_id_buffer.image().dimensions().width_height();
-        if !(0..dims[0]).contains(&x) || !(0..dims[1]).contains(&y) {
+        if !(0..dims[0]).contains(&mouse_pos[0]) || !(0..dims[1]).contains(&mouse_pos[1]) {
             return None;
         }
 
@@ -202,7 +204,7 @@ impl Picker {
             .copy_image_to_buffer_dimensions(
                 self.object_id_buffer.image().clone(),
                 self.object_id_cpu.clone(),
-                [x, y, 0],
+                [mouse_pos[0], mouse_pos[1], 0],
                 [1, 1, 1],
                 0, 1, 0,
             ).unwrap();
