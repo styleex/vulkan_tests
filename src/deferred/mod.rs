@@ -226,7 +226,7 @@ impl Framebuffer {
     }
 }
 
-pub fn render_and_wait<F, Fn>(
+pub fn render_to_framebuffer<F, Fn>(
     before_future: F,
     gfx_queue: Arc<device::Queue>,
     framebuffer: &Framebuffer,

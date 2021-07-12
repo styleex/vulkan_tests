@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer};
-use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, SecondaryCommandBuffer, SubpassContents, PrimaryCommandBuffer};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, PrimaryCommandBuffer, SecondaryCommandBuffer, SubpassContents};
 use vulkano::device::Queue;
 use vulkano::format::Format;
-use vulkano::image::{AttachmentImage, ImageAccess, ImageUsage};
+use vulkano::image::{AttachmentImage, ImageAccess, ImageLayout, ImageUsage};
 use vulkano::image::view::ImageView;
 use vulkano::render_pass::{Framebuffer, FramebufferAbstract, RenderPass, Subpass};
 use vulkano::sync::GpuFuture;
@@ -37,15 +37,14 @@ fn get_entity_id(r: u8, g: u8, b: u8, a: u8) -> Option<u32> {
 impl Picker {
     pub fn new(gfx_queue: Arc<Queue>) -> Picker {
         let render_pass = Arc::new(
-            vulkano::ordered_passes_renderpass!(gfx_queue.device().clone(),
+            vulkano::single_pass_renderpass!(gfx_queue.device().clone(),
             attachments: {
-                // The image that will contain the final rendering (in this example the swapchain
-                // image, but it could be another image).
                 id_map: {
                     load: Clear,
                     store: Store,
                     format: Format::R8G8B8A8Unorm,
                     samples: 1,
+                    final_layout: ImageLayout::ColorAttachmentOptimal,
                 },
                 // Will be bound to `self.depth_buffer`.
                 depth: {
@@ -53,20 +52,18 @@ impl Picker {
                     store: DontCare,
                     format: Format::D32Sfloat,
                     samples: 1,
+                        final_layout: ImageLayout::DepthStencilAttachmentOptimal,
                 }
             },
-            passes: [
-                // Write to the diffuse, normals and depth attachments.
-                {
-                    color: [id_map],
-                    depth_stencil: {depth},
-                    input: []
-                }
-            ]
+            pass: {
+                color: [id_map],
+                depth_stencil: {depth}
+            }
         ).unwrap());
 
         let obj_id_usage = ImageUsage {
             transfer_source: true, // This is necessary to copy to external buffer
+            color_attachment: true,
             ..ImageUsage::none()
         };
         let object_id_buffer = ImageView::new(
@@ -130,8 +127,10 @@ impl Picker {
     {
         // Recreate framebuffer
         if self.object_id_buffer.image().dimensions().width_height() != img_dims {
+            println!("recreated");
             let obj_id_usage = ImageUsage {
-                transfer_source: true, // This is necessary to copy to external buffer
+                transfer_source: true,
+                color_attachment: true,
                 ..ImageUsage::none()
             };
             self.object_id_buffer = ImageView::new(
@@ -178,6 +177,11 @@ impl Picker {
             );
         }
 
+        let dims = self.object_id_buffer.image().dimensions().width_height();
+        if !(0..dims[0]).contains(&x) || !(0..dims[1]).contains(&y) {
+            return None;
+        }
+
         // Start the command buffer builder that will be filled throughout the frame handling.
         let mut command_buffer_builder =
             AutoCommandBufferBuilder::primary(self.gfx_queue.device().clone(),
@@ -192,11 +196,6 @@ impl Picker {
             .unwrap();
 
         command_buffer_builder.execute_commands_from_vec(cmds).unwrap();
-
-        let dims = self.object_id_buffer.image().dimensions().width_height();
-        if !(0..dims[0]).contains(&x) || !(0..dims[1]).contains(&y) {
-            return None;
-        }
 
         command_buffer_builder
             .end_render_pass().unwrap()

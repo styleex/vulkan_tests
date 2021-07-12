@@ -8,13 +8,13 @@ use vulkano::device::DeviceExtensions;
 use vulkano::image::{ImageUsage, ImageViewAbstract};
 use vulkano::image::view::ImageView;
 use vulkano::instance::{Instance, InstanceExtensions, PhysicalDevice};
+use vulkano::instance::debug::{DebugCallback, MessageSeverity, MessageType};
 use vulkano::swapchain::{AcquireError, Swapchain, SwapchainCreationError};
 use vulkano::sync::{FlushError, GpuFuture};
 use vulkano_win::VkSurfaceBuild;
 use winit::event::{ElementState, Event, VirtualKeyCode, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
-use vulkano::instance::debug::{DebugCallback, MessageSeverity, MessageType};
 
 use super::imgui_pass::GuiPass;
 
@@ -39,10 +39,10 @@ pub fn run_app<F, A>(create_app: F)
     };
 
     #[cfg(not(target_os = "macos"))]
-    let layers = vec!["VK_LAYER_LUNARG_standard_validation"];
+        let layers = vec!["VK_LAYER_LUNARG_standard_validation"];
 
     #[cfg(target_os = "macos")]
-    let layers = vec!["VK_LAYER_KHRONOS_validation"];
+        let layers = vec!["VK_LAYER_KHRONOS_validation"];
 
     let instance = Instance::new(None, Version::V1_1, &required_extensions, layers).unwrap();
 
@@ -79,10 +79,10 @@ pub fn run_app<F, A>(create_app: F)
         };
 
         println!("{} {} {}: {}",
-            msg.layer_prefix.unwrap_or("unknown"),
-            ty,
-            severity,
-            msg.description
+                 msg.layer_prefix.unwrap_or("unknown"),
+                 ty,
+                 severity,
+                 msg.description
         );
     }).ok();
 
@@ -124,35 +124,39 @@ pub fn run_app<F, A>(create_app: F)
     };
 
     // [IMGUI]
-    let mut imgui = Context::create();
-    imgui.set_ini_filename(None);
+    let (mut imgui, mut imgui_platform) = {
+        let mut imgui = Context::create();
+        imgui.set_ini_filename(None);
 
-    let mut platform = WinitPlatform::init(&mut imgui);
-    platform.attach_window(imgui.io_mut(), &surface.window(), HiDpiMode::Rounded);
+        let mut platform = WinitPlatform::init(&mut imgui);
+        platform.attach_window(imgui.io_mut(), &surface.window(), HiDpiMode::Rounded);
 
-    let hidpi_factor = platform.hidpi_factor();
-    let font_size = (13.0 * hidpi_factor) as f32;
-    imgui.fonts().add_font(&[
-        FontSource::DefaultFontData {
-            config: Some(FontConfig {
+        let hidpi_factor = platform.hidpi_factor();
+        let font_size = (13.0 * hidpi_factor) as f32;
+        imgui.fonts().add_font(&[
+            FontSource::DefaultFontData {
+                config: Some(FontConfig {
+                    size_pixels: font_size,
+                    ..FontConfig::default()
+                }),
+            },
+            FontSource::TtfData {
+                data: include_bytes!("../../resources/font/mplus-1p-regular.ttf"),
                 size_pixels: font_size,
-                ..FontConfig::default()
-            }),
-        },
-        FontSource::TtfData {
-            data: include_bytes!("../../resources/font/mplus-1p-regular.ttf"),
-            size_pixels: font_size,
-            config: Some(FontConfig {
-                rasterizer_multiply: 1.75,
-                glyph_ranges: FontGlyphRanges::japanese(),
-                ..FontConfig::default()
-            }),
-        },
-    ]);
+                config: Some(FontConfig {
+                    rasterizer_multiply: 1.75,
+                    glyph_ranges: FontGlyphRanges::cyrillic(),
+                    ..FontConfig::default()
+                }),
+            },
+        ]);
 
-    imgui.io_mut().font_global_scale = (1.0 / hidpi_factor) as f32;
+        imgui.io_mut().font_global_scale = (1.0 / hidpi_factor) as f32;
 
-    let mut imgui_pass = GuiPass::new(&mut imgui, queue.clone(), swapchain.format());
+        (imgui, platform)
+    };
+
+    let mut imgui_render = GuiPass::new(&mut imgui, queue.clone(), swapchain.format());
     // [/IMGUI]
 
     let mut app = create_app(queue.clone(), swapchain.format());
@@ -166,7 +170,7 @@ pub fn run_app<F, A>(create_app: F)
             _ => {}
         }
 
-        platform.handle_event(imgui.io_mut(), surface.window(), &event);
+        imgui_platform.handle_event(imgui.io_mut(), surface.window(), &event);
 
         match event {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
@@ -184,7 +188,7 @@ pub fn run_app<F, A>(create_app: F)
                 }
             }
             Event::MainEventsCleared => {
-                platform.prepare_frame(imgui.io_mut(), surface.window()).unwrap();
+                imgui_platform.prepare_frame(imgui.io_mut(), surface.window()).unwrap();
                 surface.window().request_redraw();
             }
             Event::RedrawRequested(_) => {
@@ -229,12 +233,12 @@ pub fn run_app<F, A>(create_app: F)
 
                 // [IMGUI]
                 let mut ui = imgui.frame();
-                platform.prepare_render(&ui, surface.window());
+                imgui_platform.prepare_render(&ui, surface.window());
                 app.render_gui(&mut ui);
 
                 let draw_data = ui.render();
 
-                after_future = imgui_pass.draw(
+                after_future = imgui_render.draw(
                     after_future,
                     queue.clone(),
                     swapchain_images[image_num].clone(),

@@ -2,17 +2,17 @@ use std::sync::Arc;
 
 use cgmath::{Matrix4, SquareMatrix};
 use imgui;
-use imgui::{im_str, Window as ImguiWindow, Condition};
-use vulkano::format;
+use imgui::{Condition, im_str, Window as ImguiWindow};
 use vulkano::device::Queue;
+use vulkano::format;
 use vulkano::format::Format;
 use vulkano::image::{ImageViewAbstract, SampleCount};
 use vulkano::sync::GpuFuture;
-use winit::event::WindowEvent;
+use winit::event::{WindowEvent, ElementState, MouseButton};
 
 use crate::base::app;
 use crate::camera::Camera;
-use crate::deferred::{Framebuffer, lighting_pass, render_and_wait, RenderTargetDesc};
+use crate::deferred::{Framebuffer, lighting_pass, render_to_framebuffer, RenderTargetDesc};
 use crate::terrain_game::Map;
 use crate::terrain_render_system::{RenderPipeline, TerrainRenderSystem};
 
@@ -38,6 +38,10 @@ struct MyApp {
     terrain: TerrainRenderSystem,
 
     lighting_pass: Option<lighting_pass::LightingPass>,
+
+    last_cursor_pos: [u32; 2],
+    cursor_pos_changed: bool,
+    last_selected_object_id: Option<u32>,
 }
 
 impl MyApp {
@@ -76,6 +80,10 @@ impl MyApp {
             terrain_map,
 
             lighting_pass,
+
+            last_cursor_pos: [0, 0],
+            cursor_pos_changed: false,
+            last_selected_object_id: None,
         }
     }
 }
@@ -91,6 +99,24 @@ impl app::App for MyApp {
         where F: GpuFuture + 'static,
               I: ImageViewAbstract + Send + Sync + 'static
     {
+        self.terrain_map.update();
+        if self.cursor_pos_changed {
+            let cb = self.terrain.render(
+                RenderPipeline::ObjectIdMap,
+                &self.terrain_map,
+                dimensions,
+                Matrix4::identity(),
+                self.camera.view_matrix(),
+                self.camera.proj_matrix(),
+            );
+
+            let entity_id = self.mouse_picker.draw(dimensions, vec![cb], self.last_cursor_pos[0], self.last_cursor_pos[1]);
+            self.terrain_map.highlight(entity_id);
+            self.cursor_pos_changed = false;
+
+            self.last_selected_object_id = entity_id;
+        }
+
         let cb = self.terrain.render(
             RenderPipeline::Diffuse,
             &self.terrain_map,
@@ -100,7 +126,7 @@ impl app::App for MyApp {
             self.camera.proj_matrix(),
         );
 
-        let after_future = render_and_wait(
+        let after_future = render_to_framebuffer(
             before_future,
             self.queue.clone(),
             &self.gbuffer,
@@ -119,6 +145,21 @@ impl app::App for MyApp {
 
     fn handle_event(&mut self, event: &WindowEvent) {
         self.camera.handle_event(event);
+
+        match event {
+            WindowEvent::CursorMoved { position, .. } => {
+                if self.last_cursor_pos != [position.x as u32, position.y as u32] {
+                    self.last_cursor_pos = [position.x as u32, position.y as u32];
+                    self.cursor_pos_changed = true;
+                }
+            }
+            &WindowEvent::MouseInput { state, button, .. } => {
+                if (state == ElementState::Pressed) && (button == MouseButton::Left) {
+                    self.terrain_map.select(self.last_selected_object_id);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn render_gui(&mut self, ui: &mut imgui::Ui) {

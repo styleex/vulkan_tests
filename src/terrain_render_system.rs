@@ -96,7 +96,8 @@ impl TerrainRenderSystem {
     }
 
     pub fn render(&mut self, pipeline: RenderPipeline, map: &Map, viewport_dimensions: [u32; 2],
-                  world: Matrix4<f32>, view: Matrix4<f32>, proj: Matrix4<f32>) -> SecondaryAutoCommandBuffer {
+                  world: Matrix4<f32>, view: Matrix4<f32>, proj: Matrix4<f32>) -> SecondaryAutoCommandBuffer
+    {
         let uniform_buffer_subbuffer = {
             let uniform_data = vs::ty::Data {
                 world: world.into(),
