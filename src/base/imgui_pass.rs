@@ -6,8 +6,8 @@ use vulkano::buffer::{BufferAccess, BufferUsage, CpuBufferPool};
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, DynamicState, SubpassContents};
 use vulkano::descriptor::descriptor_set::PersistentDescriptorSet;
 use vulkano::device::{Device, Queue};
-use vulkano::format::{Format, ClearValue};
-use vulkano::image::{ImageDimensions, ImageViewAbstract, ImmutableImage};
+use vulkano::format::{ClearValue, Format};
+use vulkano::image::{ImageAccess, ImageDimensions, ImageViewAbstract, ImmutableImage};
 use vulkano::image::view::ImageView;
 use vulkano::pipeline::{GraphicsPipeline, GraphicsPipelineAbstract};
 use vulkano::pipeline::viewport::{Scissor, Viewport};
@@ -30,10 +30,12 @@ pub type Texture = (Arc<dyn ImageViewAbstract + Send + Sync>, Arc<Sampler>);
 pub struct GuiPass {
     gfx_queue: Arc<Queue>,
     pipeline: Arc<dyn GraphicsPipelineAbstract + Send + Sync>,
+    pipeline_ms: Arc<dyn GraphicsPipelineAbstract + Send + Sync>,
+
     vrt_buffer_pool: CpuBufferPool<Vertex>,
     idx_buffer_pool: CpuBufferPool<u16>,
     font_texture: Texture,
-    textures: Textures<Texture>,
+    pub textures: Textures<Texture>,
 
     render_pass: Arc<render_pass::RenderPass>,
 }
@@ -79,6 +81,25 @@ impl GuiPass {
             )
         };
 
+        let pipeline_ms = {
+            let vs = vs::Shader::load(gfx_queue.device().clone())
+                .expect("failed to create shader module");
+            let fs = fs_multisampled::Shader::load(gfx_queue.device().clone())
+                .expect("failed to create shader module");
+
+            Arc::new(
+                GraphicsPipeline::start()
+                    .vertex_input_single_buffer::<Vertex>()
+                    .vertex_shader(vs.main_entry_point(), ())
+                    .triangle_list()
+                    .viewports_scissors_dynamic(1)
+                    .fragment_shader(fs.main_entry_point(), ())
+                    .blend_alpha_blending()
+                    .render_pass(Subpass::from(render_pass.clone(), 0).unwrap())
+                    .build(gfx_queue.device().clone()).unwrap()
+            )
+        };
+
         let device = gfx_queue.device().clone();
 
         let vrt_buffer_pool = CpuBufferPool::new(device.clone(), BufferUsage::vertex_buffer_transfer_destination());
@@ -91,6 +112,7 @@ impl GuiPass {
         GuiPass {
             gfx_queue,
             pipeline,
+            pipeline_ms,
             textures,
             font_texture,
             vrt_buffer_pool,
@@ -179,8 +201,6 @@ impl GuiPass {
             let clip_off = draw_data.display_pos;
             let clip_scale = draw_data.framebuffer_scale;
 
-            let layout = self.pipeline.layout().descriptor_set_layout(0).unwrap();
-
             for cmd in draw_list.commands() {
                 match cmd {
                     DrawCmd::Elements {
@@ -222,6 +242,15 @@ impl GuiPass {
                             let tex = self.lookup_texture(texture_id)
                                 .unwrap();
 
+
+                            let pipeline = if (tex.0.image().samples() as u32) == 1 {
+                                self.pipeline.clone()
+                            } else {
+                                self.pipeline_ms.clone()
+                            };
+
+                            let layout = pipeline.layout().descriptor_set_layout(0).unwrap();
+
                             let set = Arc::new(
                                 PersistentDescriptorSet::start(layout.clone())
                                     .add_sampled_image(tex.0.clone(), tex.1.clone())
@@ -231,7 +260,7 @@ impl GuiPass {
                             );
 
                             builder.draw_indexed(
-                                self.pipeline.clone(),
+                                pipeline,
                                 &dynamic_state,
                                 vec![vertex_buffer.clone()],
                                 index_buffer.clone().into_buffer_slice().slice(idx_offset..(idx_offset + count)).unwrap(),
@@ -353,6 +382,32 @@ layout(location = 0) out vec4 Target0;
 
 void main() {
     Target0 = f_color * texture(tex, f_uv.st);
+}
+"
+    }
+}
+
+mod fs_multisampled {
+    vulkano_shaders::shader! {
+        ty: "fragment",
+        src: "
+#version 450
+
+layout(binding = 0) uniform sampler2DMS tex;
+
+layout(location = 0) in vec2 f_uv;
+layout(location = 1) in vec4 f_color;
+
+layout(location = 0) out vec4 Target0;
+
+void main() {
+    vec3 ret = vec3(0.0);
+    ivec2 sz = textureSize(tex);
+    for (int i = 0; i < 4; i++) {
+      ret += texelFetch(tex, ivec2(f_uv.xy * sz), i).rgb;
+    }
+
+    Target0 = vec4(ret / 4, 1.0);
 }
 "
     }

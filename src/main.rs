@@ -3,14 +3,14 @@ use std::sync::Arc;
 use cgmath::{Matrix4, SquareMatrix};
 use imgui;
 use imgui::{Condition, im_str, Window as ImguiWindow};
+use vulkano::{format, sampler};
 use vulkano::device::Queue;
-use vulkano::format;
 use vulkano::format::Format;
 use vulkano::image::{ImageViewAbstract, SampleCount};
 use vulkano::sync::GpuFuture;
-use winit::event::{WindowEvent, ElementState, MouseButton};
+use winit::event::{ElementState, MouseButton, WindowEvent};
 
-use crate::base::app;
+use crate::base::{app, imgui_pass};
 use crate::camera::Camera;
 use crate::deferred::{Framebuffer, lighting_pass, render_to_framebuffer, RenderTargetDesc};
 use crate::terrain_game::Map;
@@ -42,6 +42,10 @@ struct MyApp {
     last_cursor_pos: [u32; 2],
     cursor_pos_changed: bool,
     last_selected_object_id: Option<u32>,
+
+    normal_texture: Option<imgui::TextureId>,
+
+    dims: [u32; 2],
 }
 
 impl MyApp {
@@ -84,15 +88,23 @@ impl MyApp {
             last_cursor_pos: [0, 0],
             cursor_pos_changed: false,
             last_selected_object_id: None,
+
+            normal_texture: None,
+            dims: [0, 0],
         }
     }
 }
 
 
 impl app::App for MyApp {
-    fn resize_swapchain(&mut self, dimensions: [u32; 2]) {
+    fn resize_swapchain(&mut self, dimensions: [u32; 2], textures: &mut imgui::Textures<imgui_pass::Texture>) {
         self.camera.set_viewport(dimensions[0], dimensions[1]);
         self.gbuffer.resize_swapchain(dimensions);
+
+        let sampler = sampler::Sampler::simple_repeat_linear(self.queue.device().clone());
+
+        self.normal_texture = Some(textures.insert((self.gbuffer.view(1).clone(), sampler)));
+        self.dims = dimensions;
     }
 
     fn render<F, I>(&mut self, before_future: F, dimensions: [u32; 2], image: Arc<I>) -> Box<dyn GpuFuture>
@@ -163,11 +175,21 @@ impl app::App for MyApp {
     }
 
     fn render_gui(&mut self, ui: &mut imgui::Ui) {
-        ImguiWindow::new(im_str!("Stats"))
-            .size([100.0, 50.0], Condition::FirstUseEver)
+        ImguiWindow::new(im_str!("stats"))
+            .title_bar(false)
+            .size([100.0, 40.0], Condition::FirstUseEver)
             .position([0.0, 0.0], Condition::FirstUseEver)
             .build(&ui, || {
                 ui.text(format!("FPS: ({:.1})", ui.io().framerate));
+            });
+
+        let w = 210.0;
+        ImguiWindow::new(im_str!("gbuffer content"))
+            .size([w, 240.0], Condition::FirstUseEver)
+            .position([self.dims[0] as f32 - w, 0.0], Condition::Always)
+            .collapsed(true, Condition::FirstUseEver)
+            .build(&ui, || {
+                imgui::Image::new(self.normal_texture.unwrap(), [200.0, 200.0]).build(&ui);
             });
     }
 }

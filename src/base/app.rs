@@ -17,9 +17,10 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
 
 use super::imgui_pass::GuiPass;
+use crate::base::imgui_pass;
 
 pub trait App {
-    fn resize_swapchain(&mut self, dimensions: [u32; 2]);
+    fn resize_swapchain(&mut self, dimensions: [u32; 2], textures: &mut imgui::Textures<imgui_pass::Texture>);
     fn render<F, I>(&mut self, before_future: F, dimensions: [u32; 2], image: Arc<I>) -> Box<dyn GpuFuture>
         where F: GpuFuture + 'static,
               I: ImageViewAbstract + Send + Sync + 'static;
@@ -160,7 +161,7 @@ pub fn run_app<F, A>(create_app: F)
     // [/IMGUI]
 
     let mut app = create_app(queue.clone(), swapchain.format());
-    app.resize_swapchain(surface.window().inner_size().into());
+    app.resize_swapchain(surface.window().inner_size().into(), &mut imgui_render.textures);
 
     let mut recreate_swapchain = false;
     let mut previous_frame_end = Some(Box::new(sync::now(device.clone())) as Box<dyn GpuFuture>);
@@ -211,7 +212,7 @@ pub fn run_app<F, A>(create_app: F)
                     swapchain = new_swapchain;
                     swapchain_images = new_images;
 
-                    app.resize_swapchain(dimensions);
+                    app.resize_swapchain(dimensions, &mut imgui_render.textures);
                     recreate_swapchain = false;
                 }
 

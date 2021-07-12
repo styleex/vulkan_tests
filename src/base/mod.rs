@@ -1,2 +1,2 @@
 pub mod app;
-mod imgui_pass;
+pub mod imgui_pass;
