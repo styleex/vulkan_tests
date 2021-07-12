@@ -122,11 +122,9 @@ impl Picker {
             depth_buffer,
         }
     }
-
     pub fn subpass(&self) -> Subpass {
         Subpass::from(self.render_pass.clone(), 0).unwrap()
     }
-
     pub fn draw<C>(&mut self, img_dims: [u32; 2], cmds: Vec<C>, x: u32, y: u32) -> Option<u32>
         where C: SecondaryCommandBuffer + Send + Sync + 'static
     {

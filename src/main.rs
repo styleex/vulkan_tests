@@ -2,24 +2,15 @@ use std::sync::Arc;
 
 use cgmath::{Matrix4, SquareMatrix};
 use imgui;
-use imgui::{Condition, Context, FontConfig, FontGlyphRanges, FontSource, im_str, Window as ImguiWindow};
-use imgui_winit_support::{HiDpiMode, WinitPlatform};
-use vulkano::{format, swapchain, Version};
-use vulkano::device::{Device, DeviceExtensions, Queue};
+use imgui::{im_str, Window as ImguiWindow, Condition};
+use vulkano::format;
+use vulkano::device::Queue;
 use vulkano::format::Format;
-use vulkano::image::{ImageAccess, ImageUsage, ImageViewAbstract, SampleCount};
-use vulkano::image::view::ImageView;
-use vulkano::instance::{Instance, PhysicalDevice};
-use vulkano::swapchain::{AcquireError, Surface, Swapchain, SwapchainCreationError};
-use vulkano::sync::{FlushError, GpuFuture};
-use vulkano::sync;
-use vulkano_win::{create_vk_surface, SafeBorrow, VkSurfaceBuild};
-use winit::event::{Event, MouseButton, WindowEvent};
-use winit::event::{ElementState, VirtualKeyCode};
-use winit::event_loop::{ControlFlow, EventLoop};
-use winit::platform::run_return::EventLoopExtRunReturn;
-use winit::window::{Window, WindowBuilder};
+use vulkano::image::{ImageViewAbstract, SampleCount};
+use vulkano::sync::GpuFuture;
+use winit::event::WindowEvent;
 
+use crate::base::app;
 use crate::camera::Camera;
 use crate::deferred::{Framebuffer, lighting_pass, render_and_wait, RenderTargetDesc};
 use crate::terrain_game::Map;
@@ -33,13 +24,10 @@ mod terrain_game;
 mod terrain_render_system;
 mod cube;
 mod mouse_picker;
-mod app;
-
-use crate::app::{App, run_app};
+mod base;
 
 
 struct MyApp {
-    swapchain_format: format::Format,
     queue: Arc<Queue>,
 
     camera: Camera,
@@ -88,12 +76,12 @@ impl MyApp {
             terrain_map,
 
             lighting_pass,
-            swapchain_format,
         }
     }
 }
 
-impl App for MyApp {
+
+impl app::App for MyApp {
     fn resize_swapchain(&mut self, dimensions: [u32; 2]) {
         self.camera.set_viewport(dimensions[0], dimensions[1]);
         self.gbuffer.resize_swapchain(dimensions);
@@ -112,7 +100,7 @@ impl App for MyApp {
             self.camera.proj_matrix(),
         );
 
-        let mut after_future = render_and_wait(
+        let after_future = render_and_wait(
             before_future,
             self.queue.clone(),
             &self.gbuffer,
@@ -131,6 +119,15 @@ impl App for MyApp {
 
     fn handle_event(&mut self, event: &WindowEvent) {
         self.camera.handle_event(event);
+    }
+
+    fn render_gui(&mut self, ui: &mut imgui::Ui) {
+        ImguiWindow::new(im_str!("Stats"))
+            .size([100.0, 50.0], Condition::FirstUseEver)
+            .position([0.0, 0.0], Condition::FirstUseEver)
+            .build(&ui, || {
+                ui.text(format!("FPS: ({:.1})", ui.io().framerate));
+            });
     }
 }
 

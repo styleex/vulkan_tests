@@ -27,7 +27,6 @@ pub type Texture = (Arc<dyn ImageViewAbstract + Send + Sync>, Arc<Sampler>);
 
 
 #[allow(dead_code)]
-/// Allows applying a directional light source to a scene.
 pub struct GuiPass {
     gfx_queue: Arc<Queue>,
     pipeline: Arc<dyn GraphicsPipelineAbstract + Send + Sync>,
@@ -41,15 +40,12 @@ pub struct GuiPass {
 
 #[allow(dead_code)]
 impl GuiPass {
-    /// Initializes the directional lighting system.
     pub fn new(ctx: &mut imgui::Context, gfx_queue: Arc<Queue>, output_format: vulkano::format::Format) -> GuiPass
     {
         let render_pass = Arc::new(
             vulkano::single_pass_renderpass!(
                 gfx_queue.device().clone(),
                 attachments: {
-                    // The image that will contain the final rendering (in this example the swapchain
-                    // image, but it could be another image).
                     final_color: {
                         load: Load,
                         store: Store,
@@ -103,25 +99,18 @@ impl GuiPass {
         }
     }
 
-    pub fn draw<F, DF, I>(
+    pub fn draw<F, I>(
         &mut self,
         before_future: F,
         gfx_queue: Arc<Queue>,
         target_image: Arc<I>,
-        ctx: &mut imgui::Context,
         viewport_dimensions: [u32; 2],
-        mut draw_func: DF,
+        draw_data: &imgui::DrawData,
     ) -> Box<dyn GpuFuture>
         where
             F: GpuFuture + 'static,
-            DF: FnMut(&mut imgui::Ui),
             I: ImageViewAbstract + Send + Sync + 'static
     {
-        let mut ui = ctx.frame();
-        draw_func(&mut ui);
-
-        let draw_data = ui.render();
-
         let framebuffer = Arc::new(
             render_pass::Framebuffer::start(self.render_pass.clone())
                 .add(target_image.clone())

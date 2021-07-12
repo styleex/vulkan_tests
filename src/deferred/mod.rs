@@ -10,7 +10,6 @@ use vulkano::render_pass::{AttachmentDesc, AttachmentsList, FramebufferAbstract,
 use vulkano::sync::GpuFuture;
 
 pub mod lighting_pass;
-pub mod imgui_pass;
 
 
 struct FbWrapper {
@@ -231,7 +230,7 @@ pub fn render_and_wait<F, Fn>(
     before_future: F,
     gfx_queue: Arc<device::Queue>,
     framebuffer: &Framebuffer,
-    mut f: Fn,
+    f: Fn,
 ) -> Box<dyn GpuFuture>
     where
         F: GpuFuture + 'static,
