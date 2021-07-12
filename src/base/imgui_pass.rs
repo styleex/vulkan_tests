@@ -7,7 +7,7 @@ use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, Dyna
 use vulkano::descriptor::descriptor_set::PersistentDescriptorSet;
 use vulkano::device::{Device, Queue};
 use vulkano::format::{ClearValue, Format};
-use vulkano::image::{ImageAccess, ImageDimensions, ImageViewAbstract, ImmutableImage};
+use vulkano::image::{ImageDimensions, ImageViewAbstract, ImmutableImage};
 use vulkano::image::view::ImageView;
 use vulkano::pipeline::{GraphicsPipeline, GraphicsPipelineAbstract};
 use vulkano::pipeline::viewport::{Scissor, Viewport};
