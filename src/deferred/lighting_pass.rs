@@ -185,52 +185,13 @@ vulkano::impl_vertex!(Vertex, position);
 mod vs {
     vulkano_shaders::shader! {
         ty: "vertex",
-        src: "
-#version 450
-
-layout(location = 0) in vec2 position;
-layout (location = 1) out vec2 outUV;
-
-void main() {
-    gl_Position = vec4(position, 0.0, 1.0);
-    outUV = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
-
-}"
+        bytes: "resources/shaders/deferred_lighting.vert.spv"
     }
 }
 
 mod fs {
     vulkano_shaders::shader! {
         ty: "fragment",
-        src: "
-#version 450
-
-// The `color_input` parameter of the `draw` method.
-layout(set = 0, binding = 0) uniform sampler2DMS u_diffuse;
-
-layout(push_constant) uniform PushConstants {
-    // The `ambient_color` parameter of the `draw` method.
-    vec4 color;
-} push_constants;
-
-layout(location = 0) out vec4 f_color;
-
-layout (constant_id = 0) const int NUM_SAMPLES = 8;
-
-layout (location = 1) in vec2 inUV;
-
-void main() {
-	vec4 result = vec4(0.0);
-	for (int i = 0; i < NUM_SAMPLES; i++)
-	{
-		vec4 val = texelFetch(u_diffuse, ivec2(gl_FragCoord.xy), i);
-		result += val;
-	}
-	// Average resolved samples
-	result = result / float(NUM_SAMPLES);
-
-    f_color.rgb = push_constants.color.rgb * result.rgb;
-    f_color.a = 1.0;
-}"
+        bytes: "resources/shaders/deferred_lighting.frag.spv"
     }
 }

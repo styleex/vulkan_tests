@@ -192,118 +192,27 @@ impl TerrainRenderSystem {
 mod vs {
     vulkano_shaders::shader! {
         ty: "vertex",
-        src: "
-            #version 450
-
-            layout(location = 0) in vec3 position;
-            layout(location = 1) in vec3 normal;
-            layout(location = 2) in vec3 color;
-
-            layout(location = 3) in vec2 position_offset;
-            layout(location = 5) in vec4 highlight;
-
-            layout(set = 0, binding = 0) uniform Data {
-                mat4 world;
-                mat4 view;
-                mat4 proj;
-            } uniforms;
-
-            layout(location=1) out vec3 rnormal;
-            layout(location=2) out vec3 rpos;
-            layout(location=3) out vec3 out_color;
-            layout(location=5) out vec4 out_hightlight;
-
-            void main() {
-                mat4 worldview = uniforms.view;// * uniforms.world;
-
-                vec3 s_pos = position;
-                s_pos.x += position_offset.x;
-                s_pos.z -= position_offset.y;
-
-                gl_Position = uniforms.proj * worldview * vec4(s_pos, 1.0);
-
-                rpos = s_pos;
-                rnormal = normal;
-                out_color = color;
-                out_hightlight = highlight;
-            }
-        "
+        bytes: "resources/shaders/blocks_terrain/mrt.vert.spv"
     }
 }
 
 mod fs {
     vulkano_shaders::shader! {
         ty: "fragment",
-        src: "
-            #version 450
-
-            layout(location = 0) out vec4 f_color;
-            layout(location = 1) out vec4 f_normal;
-            layout(location = 2) out vec4 f_position;
-
-
-            layout(location = 1) in vec3 in_normal;
-            layout(location = 2) in vec3 in_world;
-            layout(location = 3) in vec3 in_color;
-            layout(location=5) in vec4 in_hightlight;
-
-            void main() {
-                f_color = vec4(in_color, 1.0) * in_hightlight.x + vec4(0.0, 0.0, 1.0, 1.0) * (1 - in_hightlight.x);
-                f_normal = vec4(in_normal, 1.0);
-                f_position = vec4(in_world, 1.0);
-            }
-        "
+        bytes: "resources/shaders/blocks_terrain/mrt.frag.spv"
     }
 }
 
 mod vs_object_map {
     vulkano_shaders::shader! {
         ty: "vertex",
-        src: "
-            #version 450
-
-            layout(location = 0) in vec3 position;
-
-            layout(location = 3) in vec2 position_offset;
-            layout(location = 4) in vec4 object_id;
-
-            layout(set = 0, binding = 0) uniform Data {
-                mat4 world;
-                mat4 view;
-                mat4 proj;
-            } uniforms;
-
-            layout(location=1) out vec4 out_color;
-
-            void main() {
-                mat4 worldview = uniforms.view;
-
-                vec4 s_pos = vec4(
-                    position.x + position_offset.x,
-                    position.y,
-                    position.z - position_offset.y,
-                    1.0
-                );
-
-                gl_Position = uniforms.proj * worldview * s_pos;
-                out_color = object_id;
-            }
-        "
+        bytes: "resources/shaders/blocks_terrain/object_id.vert.spv"
     }
 }
 
 mod fs_object_map {
     vulkano_shaders::shader! {
         ty: "fragment",
-        src: "
-            #version 450
-
-            layout(location = 0) out vec4 f_color;
-            layout(location = 1) in vec4 in_color;
-
-            void main() {
-                f_color = in_color;
-            }
-        "
+        bytes: "resources/shaders/blocks_terrain/object_id.frag.spv"
     }
 }
